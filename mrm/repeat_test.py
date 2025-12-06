@@ -87,7 +87,7 @@ class RepeatCausalLinear(nn.Module):
             indexing="ij",
         )
         M = torch.where(
-            j >= i, v[i], torch.zeros(m, m, device=v.device, dtype=v.dtype)
+            j >= i, v[j], torch.zeros(m, m, device=v.device, dtype=v.dtype)
         )
         return M
 
@@ -353,7 +353,7 @@ if __name__ == "__main__":
     tokenized_length = 512
     dim = 512
     layers = 16
-    n_heads = 4
+    n_heads = None
     kernel= 1
 
     model = MLPMixer(
@@ -367,7 +367,7 @@ if __name__ == "__main__":
     batch_size = total_batch_size // n_gpus
     train_path = f"{data_root}/fineweb-edu-tokenized-train-c512"
     test_path = f"{data_root}/fineweb-edu-tokenized-test-c512"
-    output_dir = f"{checkpoint_root}/fineweb_h{n_heads}_repeat_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
+    output_dir = f"{checkpoint_root}/fineweb_h{n_heads}_colrepeat_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
     
     datasets.config.IN_MEMORY_MAX_SIZE = 1e9
     train_dataset = load_from_disk(train_path, keep_in_memory=None)
@@ -410,4 +410,4 @@ if __name__ == "__main__":
     shutil.copy(code_path, output_dir) 
 
     model.train()
-    trainer.train(output_dir + '/checkpoint-40000')
+    trainer.train()
