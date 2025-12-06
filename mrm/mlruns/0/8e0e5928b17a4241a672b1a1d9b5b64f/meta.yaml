@@ -1,0 +1,15 @@
+artifact_uri: file:///home/bbadger/experiments/mrm/mrm/mlruns/0/8e0e5928b17a4241a672b1a1d9b5b64f/artifacts
+end_time: null
+entry_point_name: ''
+experiment_id: '0'
+lifecycle_stage: active
+run_id: 8e0e5928b17a4241a672b1a1d9b5b64f
+run_name: /home/bbadger/Desktop/fineweb_h4_repeat_512_n16_c512_b32x4
+run_uuid: 8e0e5928b17a4241a672b1a1d9b5b64f
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1764982560579
+status: 1
+tags: []
+user_id: bbadger
