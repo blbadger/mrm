@@ -77,22 +77,35 @@ class MLPMixer(nn.Module, GenerationMixin):
 
 	def forward(self, input_ids, labels=None, **kwargs):
 		# pad input_ids
-		input_length = len(input_ids[0])
-		pad_size = self.seq_len - input_length
-		if pad_size <= 0:
-			raise AssertionError('Input sequence too long')
-		input_ids = torch.cat((input_ids, torch.ones(1, pad_size, dtype=torch.long).to(input_ids.device)), dim=1)
+		pad_sizes = [self.seq_len - len(input_ids[i]) for i in range(len(input_ids))]
+		input_lengths = [len(input_ids[i]) for i in range(len(input_ids))]
+
+		padded_inputs = []
+		for i in range(len(input_ids)):
+			input_id_arr = input_ids[i].unsqueeze(0)
+			pad = torch.ones(pad_sizes[i], dtype=torch.long).to(input_ids.device).unsqueeze(0)
+			padded_input = torch.cat((input_id_arr, pad), dim=1)
+			padded_inputs.append(padded_input)
+		input_ids = torch.cat(padded_inputs, dim=0)
+
+		print (input_ids.shape)
 		labels = torch.where(input_ids==1, -100, input_ids) #mask pad token loss
 
 		if labels is not None:
 			labels = labels[:, 1:].contiguous()
 
+		# model's forward pass
 		x = self.input_layer(input_ids)
 		for block in self.mixer_blocks:
 			x = block(x)
 		logits = self.output_layer(x)
 		logits = logits[:, :-1].contiguous()
-		truncated_logits = logits[:, :input_length]
+
+
+		truncated_logits = []
+		for i in range(logits.shape[0]):
+			truncated_logits.append(logits[i, :input_lengths[i]])
+		truncated_logits = torch.stack(truncated_logits, dim=0)
 
 		if labels is not None:
 			logits = logits.view(-1, self.vocab_size)
@@ -120,18 +133,17 @@ if __name__ == "__main__":
     dim = 1024
     layers = 16
     n_heads = 4
-    kernel= 1
+    kernel = 1
 
     model = MLPMixer(
         n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False
     ).float().to(device)
 
+    generation_config = GenerationConfig(do_sample=True, temperature=0.7, num_beams=4)
+
     load_model(model, data_root + '/fineweb_h4_colrepeat_k1_1024_n16_c512.safetensors')
-    text = '''
-The Independent Jane
-For all the love, romance and scandal in Jane Austen’s books, what they are really about is freedom and independence. Independence of thought and the freedom to choose.
-Elizabeth’s refusal of Mr. Col'''
+    text = '''The color of the clear sky during daytime is usually'''
     input_ids = torch.tensor(tokenizer.encode(text)[1:]).unsqueeze(0).to(device) # ignore bos token
     print (input_ids)
-    output_ids = model.generate(input_ids, max_length=100)
+    output_ids = model.generate(input_ids, max_length=len(input_ids[0]) + 200, generation_config=generation_config)
     print (tokenizer.decode(output_ids[0]))
