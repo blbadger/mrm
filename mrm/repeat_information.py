@@ -8,8 +8,8 @@ import mlflow
 from transformers import AutoTokenizer, LlamaConfig, LlamaModel
 import datasets
 from datasets import load_dataset, load_from_disk
-from repeat_mixer import MLPMixer
 from dotenv import load_dotenv
+import shutil
 import safetensors
 from repeat_test import MLPMixer, MixerBlock
 
@@ -29,10 +29,9 @@ class AutoencodingMixer(nn.Module):
 	
 		self.decoderblocks = nn.ModuleList(
 			[MixerBlock(
-				dim = dim,
-				length = length, 
-				causal = True,
-				n_heads = n_heads,
+				hidden_dim = dim,
+				seq_len = length, 
+				heads = n_heads,
 				kernel = kernel
 				)
 			for i in range(depth)]
@@ -132,13 +131,13 @@ if __name__ == '__main__':
 		n_vocab, dim, tokenized_length, layers, heads=n_heads, expanded_convs=False
 	)
 	print (encoder)
-	#safetensors.torch.load_model(encoder, f'{checkpoint_root}/fineweb_flat/checkpoint-200000/model.safetensors')
+	safetensors.torch.load_model(encoder, f'{checkpoint_root}/fineweb_h4_colrepeat_k1_512_n16_c512_b32x4/checkpoint-200000/model.safetensors')
 	frozen_encoder = TruncatedModel(encoder, autoencoder=False)
 
 	compression = 1
 	kernel=1
 	heads=4
-	model = autoencoder = AutoencodingMixer(n_vocab,
+	model = AutoencodingMixer(n_vocab,
 		dim, 
 		layers, 
 		tokenized_length, 
@@ -196,7 +195,11 @@ _c{tokenized_length}_b{batch_size}x{n_devices}'
 		args=training_arguments,
 		data_collator=transformers.DataCollatorForLanguageModeling(tokenizer, mlm=False),
 	)
-
+	# save driver code snapshot in checkpoint dir 
+	code_path = os.path.abspath(__file__) 
+	if not os.path.isdir(output_dir): 
+		os.mkdir(output_dir) 
+	shutil.copy(code_path, output_dir) 
 	model.train()
 	trainer.train()
 

@@ -67,7 +67,7 @@ class MixerBlock(nn.Module):
 
             else:
                 # flat mixer layer
-                self.token_mixing_layer = KernelRepeatLinear(seq_len, 8)  # type: ignore[assignment]
+                self.token_mixing_layer = KernelRepeatLinear(seq_len, 1)  # type: ignore[assignment]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         res = x
@@ -135,7 +135,7 @@ class MLPMixer(nn.Module):
     def _init_weights(self):
 
         for m in self.modules():
-            if isinstance(m, nn.Linear) or isinstance(m, ToeplitzCausalLinear) or isinstance(m, RepeatCausalLinear) or isinstance(m, KernelRepeatLinear):
+            if isinstance(m, nn.Linear) or isinstance(m, RepeatCausalLinear) or isinstance(m, KernelRepeatLinear):
                 # Kaiming He initialization for Swish activation
                 nn.init.kaiming_normal_(m.weight)
                 if m.bias is not None:
@@ -234,7 +234,7 @@ if __name__ == "__main__":
     print("Vocab size: ", n_vocab)
 
     tokenized_length = 1024
-    dim = 1024
+    dim = 128
     layers = 16
     n_heads = None
 
@@ -249,7 +249,7 @@ if __name__ == "__main__":
     train_path = f"{data_root}/fineweb-edu-tokenized-train-c1024"
     test_path = f"{data_root}/fineweb-edu-tokenized-test-c1024"
     
-    output_dir = f"{checkpoint_root}/fineweb_copy_colrepeat_k8_{dim}_n{layers}_b16x4"
+    output_dir = f"{checkpoint_root}/fineweb_copy_colrepeat_extended_{dim}_n{layers}_b64x4"
     datasets.config.IN_MEMORY_MAX_SIZE = 50e9
     train_dataset = load_from_disk(train_path, keep_in_memory=None)
     test_dataset = load_from_disk(test_path, keep_in_memory=None).filter(lambda x: x['input_ids'][-1] != 1).take(5000)
@@ -260,12 +260,12 @@ if __name__ == "__main__":
     print(model)
     training_arguments = transformers.TrainingArguments(
         num_train_epochs=2,
-        per_device_train_batch_size=16,
-        per_device_eval_batch_size=16,
+        per_device_train_batch_size=64,
+        per_device_eval_batch_size=64,
         #gradient_accumulation_steps=2,
         warmup_steps=50,
-        eval_steps=100,
-        save_steps=10000,
+        eval_steps=4000,
+        save_steps=8000,
         learning_rate=5e-4,
         fp16=True,
         eval_strategy="steps",
@@ -273,8 +273,9 @@ if __name__ == "__main__":
         optim="adamw_torch",
         overwrite_output_dir=True,
         save_safetensors=True,
-        max_steps=10000,
-        torch_compile=True
+        max_steps=200000,
+        torch_compile=True,
+        max_grad_norm=200.0
     )
 
     trainer = transformers.Trainer(

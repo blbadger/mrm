@@ -9,7 +9,7 @@ import mlflow
 import os
 from dotenv import load_dotenv
 import shutil
-from repeat_test import MLPMixer
+from repeat_test import MLPMixer, MixerBlock
 
 class AutoencodingMixer(nn.Module):
 
@@ -25,7 +25,7 @@ class AutoencodingMixer(nn.Module):
 			random=False, 
 			frozen_encoder=None, 
 			clm_encoder=False,
-			frozen_toeplitz=True
+			frozen_toeplitz=False
 		):
 		super().__init__()
 		self.double_tokens = double_tokens
@@ -152,7 +152,7 @@ class AutoencodingMixer(nn.Module):
 		else:
 			loss = 0
 		return loss, output
-
+device = 'cuda' if torch.cuda.is_available else 'cpu'
 
 
 if __name__ == "__main__":
@@ -166,12 +166,12 @@ if __name__ == "__main__":
 	print("Vocab size: ", n_vocab)
 
 	vocab_size = 8000
-	dim = 256
+	dim = 512
 	depth = 16
 	length = 512
-	compression=1     
-	kernel=1
-	heads=4
+	compression = 1     
+	kernel = 1
+	heads = 4
 	model = AutoencodingMixer(vocab_size, dim, depth, length, n_heads=heads, kernel=kernel, compression=compression, frozen_toeplitz=False)
 	train_path = f"{data_root}/fineweb-edu-tokenized-train-c512"
 	test_path = f"{data_root}/fineweb-edu-tokenized-test-c512"
@@ -209,7 +209,8 @@ _c{length}_b{batch_size}x{n_devices}'
 		overwrite_output_dir=True,
 		save_safetensors=False,
 		max_steps=200000,
-	)
+                torch_compile=True	
+)
 
 	trainer = transformers.Trainer(
 		model=model.to("cuda"),  # pre-assignment for FSDP initialization

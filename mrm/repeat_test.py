@@ -353,7 +353,7 @@ if __name__ == "__main__":
     tokenized_length = 512
     dim = 512
     layers = 16
-    n_heads = None
+    n_heads = 4
     kernel= 1
 
     model = MLPMixer(
@@ -367,7 +367,7 @@ if __name__ == "__main__":
     batch_size = total_batch_size // n_gpus
     train_path = f"{data_root}/fineweb-edu-tokenized-train-c512"
     test_path = f"{data_root}/fineweb-edu-tokenized-test-c512"
-    output_dir = f"{checkpoint_root}/fineweb_h{n_heads}_colrepeat_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
+    output_dir = f"{checkpoint_root}/fineweb_extended_h{n_heads}_colrepeat_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
     
     datasets.config.IN_MEMORY_MAX_SIZE = 1e9
     train_dataset = load_from_disk(train_path, keep_in_memory=None)
@@ -391,7 +391,7 @@ if __name__ == "__main__":
         optim="adamw_torch",
         overwrite_output_dir=True,
         save_safetensors=True,
-        max_steps=200000,
+        max_steps=500000,
         torch_compile=True
     )
 
