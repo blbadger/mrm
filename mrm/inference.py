@@ -87,8 +87,6 @@ class MLPMixer(nn.Module, GenerationMixin):
 			padded_input = torch.cat((input_id_arr, pad), dim=1)
 			padded_inputs.append(padded_input)
 		input_ids = torch.cat(padded_inputs, dim=0)
-
-		print (input_ids.shape)
 		labels = torch.where(input_ids==1, -100, input_ids) #mask pad token loss
 
 		if labels is not None:
@@ -139,11 +137,11 @@ if __name__ == "__main__":
         n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False
     ).float().to(device)
 
-    generation_config = GenerationConfig(do_sample=True, temperature=0.7, num_beams=4)
+    generation_config = GenerationConfig(do_sample=True, temperature=0.7, top_p=0.95)
 
     load_model(model, data_root + '/fineweb_h4_colrepeat_k1_1024_n16_c512.safetensors')
     text = '''The color of the clear sky during daytime is usually'''
     input_ids = torch.tensor(tokenizer.encode(text)[1:]).unsqueeze(0).to(device) # ignore bos token
     print (input_ids)
-    output_ids = model.generate(input_ids, max_length=len(input_ids[0]) + 200, generation_config=generation_config)
+    output_ids = model.generate(input_ids, max_length=len(input_ids[0]) + 50, generation_config=generation_config)
     print (tokenizer.decode(output_ids[0]))

@@ -61,7 +61,7 @@ class DiagonalCausalLinear(nn.Module):
         return out
 
 
-class RepeatCausalLinear(nn.Module):
+class ColRepeatCausalLinear(nn.Module):
 
     def __init__(self, dim: int):
 
@@ -92,9 +92,46 @@ class RepeatCausalLinear(nn.Module):
         return M
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, E, S = x.shape
+        W = self.vector_to_matrix(self.weight).to(x.dtype)
+        x_reshaped = x.reshape(B * E, S)  # (B*E, S)
+        out = x_reshaped @ W  # (B*E, S)
+        out = out + self.bias.to(x.dtype)  # broadcast bias
+        out = out.view(B, E, S)  # reshape back
+        return out
+
+
+class RowRepeatCausalLinear(nn.Module):
+
+    def __init__(self, dim: int):
+
+        super().__init__()
+
+        # Standard weight + bias
+        self.weight = nn.Parameter(torch.randn(1, dim))
+        self.bias = nn.Parameter(torch.zeros(dim))
+
+    def vector_to_matrix(self, v: torch.Tensor) -> torch.Tensor:
         """
-        x shape: (batch, embed_dim, seq_len)
+        [ a  a  a  a ]
+        [ 0  b  b  b ]
+        [ 0  0  c  c ]
+        [ 0  0  0  d ]
         """
+        v = v.reshape(-1)  # Ensure v is a 1D tensor
+        m = v.shape[0]
+        # Create index grids for rows and columns
+        i, j = torch.meshgrid(
+            torch.arange(m, device=v.device),
+            torch.arange(m, device=v.device),
+            indexing="ij",
+        )
+        M = torch.where(
+            j >= i, v[i], torch.zeros(m, m, device=v.device, dtype=v.dtype)
+        )
+        return M
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, E, S = x.shape
         W = self.vector_to_matrix(self.weight).to(x.dtype)
         x_reshaped = x.reshape(B * E, S)  # (B*E, S)
@@ -109,7 +146,6 @@ class KernelRepeatLinear(nn.Module):
     A linear layer with a triangular (causal) mask applied to the weight matrix.
     This ensures each position i cannot use info from positions > i.
     """
-
     def __init__(self, dim: int, kernel: int):
 
         super().__init__()
@@ -150,10 +186,127 @@ class KernelRepeatLinear(nn.Module):
         accumulated_output = torch.sum(out, dim=1) + self.bias
         return accumulated_output
 
+class HeadedRepeatCausalLinear(nn.Module):
+    """
+    Multi-headed parallelized implementation
+    """
+
+    def __init__(self, dim: int, heads: int):
+
+        super().__init__()
+
+        # Standard weight + bias
+        self.weight = nn.Parameter(torch.randn(heads, dim))
+        self.bias = nn.Parameter(torch.zeros(heads, dim))
+        self.heads = heads
+
+    def vector_to_matrix(self, v: torch.Tensor) -> torch.Tensor:
+        """
+        Given a matrix v of shape (k, m) and head number h >= 0, 
+        returns an (k x m x m) matrix M where M[i, j] = v[j - i] if 
+        j >= i, and 0 otherwise.
+
+        For example, if v = [[a, b, c, d], [e, f, g, h]], k=2 then M will be:
+
+        [[
+            [ a  b  c  d ]
+            [ 0  a  b  c ]
+            [ 0  0  a  b ]
+            [ 0  0  0  a ]
+        ],
+        [
+            [ e  f  g  h ]
+            [ 0  e  f  g ]
+            [ 0  0  e  f ]
+            [ 0  0  0  e ]
+        ]]
+
+        """
+        # Expects v is a preformed tensor with shape [k, D]
+        m = v.shape[-1] # vector shape
+
+        # Create index grids for rows and columns
+        i, j = torch.meshgrid(
+            torch.arange(m, device=v.device),
+            torch.arange(m, device=v.device),
+            indexing="ij",
+        )
+        # j - i gives the offset into v. When j < i, we want a 0.
+        M = torch.where(
+            j >= i, v[..., j - i], torch.zeros(m, m, device=v.device, dtype=v.dtype)
+        )
+        return M
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.to(device)
+        W = self.vector_to_matrix(self.weight).repeat(x.shape[0]//self.heads, 1, 1) 
+        output = torch.bmm(x, W)
+        repeated_bias = self.bias.repeat(x.shape[0]//self.heads, 1)
+        repeated_bias = repeated_bias.unsqueeze(1).repeat(1, x.shape[1], 1)
+        output += repeated_bias
+        return output
+
+class ParallelRepeatHeads(nn.Module):
+
+    def __init__(
+        self,
+        dim: int,
+        seq_len: int,
+        n_heads: int,
+    ):
+        # note that the hidden dim is by definition dim // n_heads
+        super().__init__()
+        self.n_heads = n_heads
+        self.in_proj = nn.Linear(dim, dim)
+        self.out_proj = nn.Linear(dim, dim)
+        self.mixer_heads = HeadedToeplitzCausalLinear(seq_len, n_heads)
+    
+    def forward(self, x:torch.Tensor) -> torch.Tensor:
+        x = rearrange(x, "b e t -> b t e")
+        headed_projection = self.in_proj(x) 
+        projections = rearrange(headed_projection, "b t (h e) -> (b h) e t", h=self.n_heads)
+        conv_projection = self.mixer_heads(projections)
+        rearranged_conv = rearrange(conv_projection, "(b h) e t -> b t (h e)", h=self.n_heads)
+        output = self.out_proj(rearranged_conv)
+        output = rearrange(output, "b t e -> b e t")
+        return output
+
+class MixedRepeatHeads(nn.Module):
+
+    def __init__(self, dim: int, seq_len: int, hidden_dim: int, n_heads: int, expanded_convs: bool = False,
+    ):
+        super().__init__()
+        self.n_heads = n_heads
+        self.proj_head = nn.ModuleList(
+            [nn.Linear(dim, hidden_dim) for i in range(n_heads)]
+        ).to(device)
+
+        self.out_proj = nn.Linear(dim, dim)
+
+        self.mixer_heads = nn.ModuleList(
+            [ColRepeatCausalLinear(seq_len) for i in range(n_heads//2)] + [RowRepeatCausalLinear(seq_len) for i in range(n_heads//2)]
+        ).to(device)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        activations = []
+        x = rearrange(x, "b e t -> b t e")
+        # pre-concatenated out projection
+        for head in range(self.n_heads):
+            projection = self.proj_head[head](x)
+            projection = rearrange(projection, "b t e -> b e t")
+            conv_projection = self.mixer_heads[head](projection)
+            rearranged_conv = rearrange(conv_projection, "b e t -> b t e")
+            activations.append(rearranged_conv)
+
+        # concatenate and project multi-headed output
+        hidden_layer = torch.cat(activations, dim=2)
+        hidden_layer = self.out_proj(hidden_layer)
+        hidden_layer = rearrange(hidden_layer, "b t e -> b e t")
+        return hidden_layer
 
 class RepeatHeads(nn.Module):
 
-    def __init__(self, dim: int, seq_len: int, hidden_dim: int, n_heads: int, expanded_convs: bool = False, dropout: float = 0.,
+    def __init__(self, dim: int, seq_len: int, hidden_dim: int, n_heads: int, expanded_convs: bool = False,
     ):
         super().__init__()
         self.n_heads = n_heads
@@ -169,7 +322,6 @@ class RepeatHeads(nn.Module):
                     nn.Sequential(
                         RepeatCausalLinear(seq_len),
                         nn.SiLU(),
-                        nn.Dropout(dropout),
                         RepeatCausalLinear(seq_len),
                     )
                     for i in range(n_heads)
@@ -200,7 +352,7 @@ class RepeatHeads(nn.Module):
 
 class MixerBlock(nn.Module):
 
-    def __init__(self, hidden_dim: int, seq_len: int, expansion_factor=4, dropout=0., heads=None, kernel=1, expanded_convs=False,
+    def __init__(self, hidden_dim: int, seq_len: int, expansion_factor=4, heads=None, kernel=1, expanded_convs=False, mixed_heads=False,
     ):
 
         super().__init__()
@@ -215,20 +367,28 @@ class MixerBlock(nn.Module):
         self.channel_mixing_layer = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim * expansion_factor),
             nn.SiLU(),
-            nn.Dropout(dropout),
             nn.Linear(hidden_dim * expansion_factor, hidden_dim),
         )
 
         # token-norm
         self.token_norm = nn.LayerNorm(hidden_dim)
         if heads is not None and heads > 0:
-            self.token_mixing_layer = RepeatHeads(
-                hidden_dim,
-                seq_len,
-                hidden_dim // heads,
-                heads,
-                expanded_convs=expanded_convs,
-            )  # type: ignore[assignment]
+            if mixed_heads:
+                self.token_mixing_layer = MixedRepeatHeads(
+                    hidden_dim,
+                    seq_len,
+                    hidden_dim // heads,
+                    heads,
+                    expanded_convs=expanded_convs,
+                    )
+            else:
+                self.token_mixing_layer = RepeatHeads(
+                    hidden_dim,
+                    seq_len,
+                    hidden_dim // heads,
+                    heads,
+                    expanded_convs=expanded_convs,
+                )  
 
         else:
             if expanded_convs:
@@ -236,9 +396,8 @@ class MixerBlock(nn.Module):
                 self.token_mixing_layer = nn.Sequential(
                     RepeatCausalLinear(seq_len),
                     nn.SiLU(),
-                    nn.Dropout(dropout),
                     RepeatCausalLinear(seq_len),
-                )  # type: ignore[assignment]
+                ) 
             elif kernel is not None and kernel > 1:
                 self.token_mixing_layer = KernelRepeatLinear(seq_len, kernel=kernel)
             else:
@@ -270,8 +429,9 @@ class MLPMixer(nn.Module):
         num_blocks: int,
         heads=None,
         kernel=1,
-	expanded_convs=False,
+	    expanded_convs=False,
         copy=False,
+        mixed_heads=False
     ):
 
         super(MLPMixer, self).__init__()
@@ -285,7 +445,7 @@ class MLPMixer(nn.Module):
         self.mixer_blocks = nn.ModuleList(
             [
                 MixerBlock(
-                    hidden_dim, seq_len, heads=heads, expanded_convs=expanded_convs, kernel=kernel
+                    hidden_dim, seq_len, heads=heads, expanded_convs=expanded_convs, kernel=kernel, mixed_heads=mixed_heads
                 )
                 for _ in range(num_blocks)
             ]
@@ -298,9 +458,9 @@ class MLPMixer(nn.Module):
         self.copy = copy
 
     def _init_weights(self):
-
         for m in self.modules():
-            if isinstance(m, nn.Linear) or isinstance(m, RepeatCausalLinear) or isinstance(m, DiagonalCausalLinear) or isinstance(m, KernelRepeatLinear):
+            if isinstance(m, nn.Linear) or isinstance(m, ColRepeatCausalLinear) isinstance(m, RowRepeatCausalLinear) \
+            or isinstance(m, DiagonalCausalLinear) or isinstance(m, KernelRepeatLinear) or isinstance(HeadedRepeatCausalLinear):
                 # Kaiming He initialization for Swish activation
                 nn.init.kaiming_normal_(m.weight)
                 if m.bias is not None:
@@ -357,7 +517,7 @@ if __name__ == "__main__":
     kernel= 1
 
     model = MLPMixer(
-        n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False
+        n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, mixed_heads=True
     ).float()
 
     #model = torch.compile(model)
@@ -367,11 +527,11 @@ if __name__ == "__main__":
     batch_size = total_batch_size // n_gpus
     train_path = f"{data_root}/fineweb-edu-tokenized-train-c512"
     test_path = f"{data_root}/fineweb-edu-tokenized-test-c512"
-    output_dir = f"{checkpoint_root}/fineweb_extended_h{n_heads}_colrepeat_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
+    output_dir = f"{checkpoint_root}/fineweb_extended_h{n_heads}_mixedrepeat_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
     
     datasets.config.IN_MEMORY_MAX_SIZE = 1e9
     train_dataset = load_from_disk(train_path, keep_in_memory=None)
-    test_dataset = load_from_disk(test_path, keep_in_memory=None)#.filter(lambda x: x['input_ids'][-1] != 1).take(5000)
+    test_dataset = load_from_disk(test_path, keep_in_memory=None)
     print(len(train_dataset), len(test_dataset))
     mlflow.end_run()
     print("training begun")
@@ -391,7 +551,7 @@ if __name__ == "__main__":
         optim="adamw_torch",
         overwrite_output_dir=True,
         save_safetensors=True,
-        max_steps=500000,
+        max_steps=200000,
         torch_compile=True
     )
 
