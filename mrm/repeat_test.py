@@ -459,8 +459,8 @@ class MLPMixer(nn.Module):
 
     def _init_weights(self):
         for m in self.modules():
-            if isinstance(m, nn.Linear) or isinstance(m, ColRepeatCausalLinear) isinstance(m, RowRepeatCausalLinear) \
-            or isinstance(m, DiagonalCausalLinear) or isinstance(m, KernelRepeatLinear) or isinstance(HeadedRepeatCausalLinear):
+            if isinstance(m, nn.Linear) or isinstance(m, ColRepeatCausalLinear) or isinstance(m, RowRepeatCausalLinear) \
+            or isinstance(m, DiagonalCausalLinear) or isinstance(m, KernelRepeatLinear) or isinstance(m, HeadedRepeatCausalLinear):
                 # Kaiming He initialization for Swish activation
                 nn.init.kaiming_normal_(m.weight)
                 if m.bias is not None:
@@ -527,7 +527,7 @@ if __name__ == "__main__":
     batch_size = total_batch_size // n_gpus
     train_path = f"{data_root}/fineweb-edu-tokenized-train-c512"
     test_path = f"{data_root}/fineweb-edu-tokenized-test-c512"
-    output_dir = f"{checkpoint_root}/fineweb_extended_h{n_heads}_mixedrepeat_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
+    output_dir = f"{checkpoint_root}/fineweb_h{n_heads}_mixedrepeat_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
     
     datasets.config.IN_MEMORY_MAX_SIZE = 1e9
     train_dataset = load_from_disk(train_path, keep_in_memory=None)
