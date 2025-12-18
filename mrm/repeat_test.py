@@ -12,6 +12,64 @@ import shutil
 
 torch.compiler.reset()
 
+class RepeatCausalLinear(nn.Module):
+
+
+    def __init__(self, dim: int, heads: int):
+
+        super().__init__()
+
+        # Standard weight + bias
+        self.weight = nn.Parameter(torch.randn(heads, dim))
+        self.bias = nn.Parameter(torch.zeros(heads, dim))
+        self.heads = heads
+
+    def vector_to_matrix(self, v: torch.Tensor) -> torch.Tensor:
+        """
+        Given a matrix v of shape (k, m) and head number h >= 0, 
+        returns an (k x m x m) matrix M where M[i, j] = v[j - i] if 
+        j >= i, and 0 otherwise.
+
+        For example, if v = [[a, b, c, d], [e, f, g, h]], k=2 then M will be:
+
+        [[
+            [ a  b  c  d ]
+            [ 0  a  b  c ]
+            [ 0  0  a  b ]
+            [ 0  0  0  a ]
+        ],
+        [
+            [ e  f  g  h ]
+            [ 0  e  f  g ]
+            [ 0  0  e  f ]
+            [ 0  0  0  e ]
+        ]]
+
+        """
+        # Expects v is a preformed tensor with shape [k, D]
+        m = v.shape[-1] # vector shape
+
+        # Create index grids for rows and columns
+        i, j = torch.meshgrid(
+            torch.arange(m, device=v.device),
+            torch.arange(m, device=v.device),
+            indexing="ij",
+        )
+        # j - i gives the offset into v. When j < i, we want a 0.
+        M = torch.where(
+            j >= i, v[..., j - i], torch.zeros(m, m, device=v.device, dtype=v.dtype)
+        )
+        return M
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.to(device)
+        W = self.vector_to_matrix(self.weight).repeat(x.shape[0]//self.heads, 1, 1) 
+        output = torch.bmm(x, W)
+        repeated_bias = self.bias.repeat(x.shape[0]//self.heads, 1)
+        repeated_bias = repeated_bias.unsqueeze(1).repeat(1, x.shape[1], 1)
+        output += repeated_bias
+        return output
+
 class DiagonalCausalLinear(nn.Module):
 
     def __init__(self, dim: int):
@@ -113,9 +171,9 @@ class RowRepeatCausalLinear(nn.Module):
 
     def vector_to_matrix(self, v: torch.Tensor) -> torch.Tensor:
         """
-        [ a  a  a  a ]
-        [ 0  b  b  b ]
-        [ 0  0  c  c ]
+        [ a  b  c  d ]
+        [ 0  b  c  d ]
+        [ 0  0  c  d ]
         [ 0  0  0  d ]
         """
         v = v.reshape(-1)  # Ensure v is a 1D tensor
@@ -136,6 +194,65 @@ class RowRepeatCausalLinear(nn.Module):
         W = self.vector_to_matrix(self.weight).to(x.dtype)
         x_reshaped = x.reshape(B * E, S)  # (B*E, S)
         out = x_reshaped @ W  # (B*E, S)
+        out = out + self.bias.to(x.dtype)  # broadcast bias
+        out = out.view(B, E, S)  # reshape back
+        return out
+
+class CombinedRepeatCausalLinear(nn.Module):
+
+    def __init__(self, dim: int):
+
+        super().__init__()
+        self.row_weight = nn.Parameter(torch.randn(1, dim))
+        self.col_weight = nn.Parameter(torch.randn(1, dim))
+        self.bias = nn.Parameter(torch.zeros(dim))
+
+    def vector_to_rowrepeat(self, v: torch.Tensor) -> torch.Tensor:
+        """
+        [ a  a  a  a ]
+        [ 0  b  b  b ]
+        [ 0  0  c  c ]
+        [ 0  0  0  d ]
+        """
+        v = v.reshape(-1)  # Ensure v is a 1D tensor
+        m = v.shape[0]
+        # Create index grids for rows and columns
+        i, j = torch.meshgrid(
+            torch.arange(m, device=v.device),
+            torch.arange(m, device=v.device),
+            indexing="ij",
+        )
+        M = torch.where(
+            j >= i, v[i], torch.zeros(m, m, device=v.device, dtype=v.dtype)
+        )
+        return M
+
+    def vector_to_colrepeat(self, v: torch.Tensor) -> torch.Tensor:
+        """
+        [ a  a  a  a ]
+        [ 0  b  b  b ]
+        [ 0  0  c  c ]
+        [ 0  0  0  d ]
+        """
+        v = v.reshape(-1)  # Ensure v is a 1D tensor
+        m = v.shape[0]
+        # Create index grids for rows and columns
+        i, j = torch.meshgrid(
+            torch.arange(m, device=v.device),
+            torch.arange(m, device=v.device),
+            indexing="ij",
+        )
+        M = torch.where(
+            j >= i, v[j], torch.zeros(m, m, device=v.device, dtype=v.dtype)
+        )
+        return M
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, E, S = x.shape
+        Wr = self.vector_to_rowrepeat(self.row_weight).to(x.dtype)
+        Wc = self.vector_to_colrepeat(self.col_weight).to(x.dtype)
+        x_reshaped = x.reshape(B * E, S)  # (B*E, S)
+        out = x_reshaped @ Wr + x_reshaped @ Wc  # (B*E, S)
         out = out + self.bias.to(x.dtype)  # broadcast bias
         out = out.view(B, E, S)  # reshape back
         return out
@@ -306,8 +423,7 @@ class MixedRepeatHeads(nn.Module):
 
 class RepeatHeads(nn.Module):
 
-    def __init__(self, dim: int, seq_len: int, hidden_dim: int, n_heads: int, expanded_convs: bool = False,
-    ):
+    def __init__(self, dim, seq_len, hidden_dim, n_heads, expanded_convs=False, combined_heads=False):
         super().__init__()
         self.n_heads = n_heads
         self.proj_head = nn.ModuleList(
@@ -328,9 +444,14 @@ class RepeatHeads(nn.Module):
                 ]
             )
         else:
-            self.mixer_heads = nn.ModuleList(
-                [RepeatCausalLinear(seq_len) for i in range(n_heads)]
-            ).to(device)
+            if combined_heads:
+                self.mixer_heads = nn.ModuleList(
+                    [CombinedRepeatCausalLinear(seq_len) for i in range(n_heads)]
+                ).to(device)
+            else:
+                self.mixer_heads = nn.ModuleList(
+                    [RepeatCausalLinear(seq_len) for i in range(n_heads)]
+                ).to(device)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         activations = []
@@ -352,7 +473,7 @@ class RepeatHeads(nn.Module):
 
 class MixerBlock(nn.Module):
 
-    def __init__(self, hidden_dim: int, seq_len: int, expansion_factor=4, heads=None, kernel=1, expanded_convs=False, mixed_heads=False,
+    def __init__(self, hidden_dim: int, seq_len: int, expansion_factor=4, heads=None, kernel=1, expanded_convs=False, mixed_heads=False, combined_heads=False
     ):
 
         super().__init__()
@@ -388,6 +509,8 @@ class MixerBlock(nn.Module):
                     hidden_dim // heads,
                     heads,
                     expanded_convs=expanded_convs,
+                    mixed_heads=mixed_heads,
+                    combined_heads=combined_heads
                 )  
 
         else:
@@ -431,7 +554,8 @@ class MLPMixer(nn.Module):
         kernel=1,
 	    expanded_convs=False,
         copy=False,
-        mixed_heads=False
+        mixed_heads=False,
+        combined_heads=False
     ):
 
         super(MLPMixer, self).__init__()
@@ -445,7 +569,7 @@ class MLPMixer(nn.Module):
         self.mixer_blocks = nn.ModuleList(
             [
                 MixerBlock(
-                    hidden_dim, seq_len, heads=heads, expanded_convs=expanded_convs, kernel=kernel, mixed_heads=mixed_heads
+                    hidden_dim, seq_len, heads=heads, expanded_convs=expanded_convs, kernel=kernel, mixed_heads=mixed_heads, combined_heads=combined_heads
                 )
                 for _ in range(num_blocks)
             ]
@@ -517,7 +641,7 @@ if __name__ == "__main__":
     kernel= 1
 
     model = MLPMixer(
-        n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, mixed_heads=True
+        n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, mixed_heads=False, combined_heads=True
     ).float()
 
     #model = torch.compile(model)
@@ -527,7 +651,7 @@ if __name__ == "__main__":
     batch_size = total_batch_size // n_gpus
     train_path = f"{data_root}/fineweb-edu-tokenized-train-c512"
     test_path = f"{data_root}/fineweb-edu-tokenized-test-c512"
-    output_dir = f"{checkpoint_root}/fineweb_h{n_heads}_mixedrepeat_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
+    output_dir = f"{checkpoint_root}/fineweb_h{n_heads}_combinedrepeat_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
     
     datasets.config.IN_MEMORY_MAX_SIZE = 1e9
     train_dataset = load_from_disk(train_path, keep_in_memory=None)
