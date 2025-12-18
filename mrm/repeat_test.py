@@ -203,8 +203,7 @@ class CombinedRepeatCausalLinear(nn.Module):
     def __init__(self, dim: int):
 
         super().__init__()
-        self.row_weight = nn.Parameter(torch.randn(1, dim))
-        self.col_weight = nn.Parameter(torch.randn(1, dim))
+        self.weight = nn.Parameter(torch.randn(2, dim))
         self.bias = nn.Parameter(torch.zeros(dim))
 
     def vector_to_rowrepeat(self, v: torch.Tensor) -> torch.Tensor:
@@ -249,8 +248,8 @@ class CombinedRepeatCausalLinear(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, E, S = x.shape
-        Wr = self.vector_to_rowrepeat(self.row_weight).to(x.dtype)
-        Wc = self.vector_to_colrepeat(self.col_weight).to(x.dtype)
+        Wr = self.vector_to_rowrepeat(self.weight[0]).to(x.dtype)
+        Wc = self.vector_to_colrepeat(self.weight[1]).to(x.dtype)
         x_reshaped = x.reshape(B * E, S)  # (B*E, S)
         out = x_reshaped @ Wr + x_reshaped @ Wc  # (B*E, S)
         out = out + self.bias.to(x.dtype)  # broadcast bias
@@ -509,7 +508,6 @@ class MixerBlock(nn.Module):
                     hidden_dim // heads,
                     heads,
                     expanded_convs=expanded_convs,
-                    mixed_heads=mixed_heads,
                     combined_heads=combined_heads
                 )  
 
@@ -583,7 +581,7 @@ class MLPMixer(nn.Module):
 
     def _init_weights(self):
         for m in self.modules():
-            if isinstance(m, nn.Linear) or isinstance(m, ColRepeatCausalLinear) or isinstance(m, RowRepeatCausalLinear) \
+            if isinstance(m, nn.Linear) or isinstance(m, ColRepeatCausalLinear) or isinstance(m, RowRepeatCausalLinear) or isinstance(m, CombinedRepeatCausalLinear) \
             or isinstance(m, DiagonalCausalLinear) or isinstance(m, KernelRepeatLinear) or isinstance(m, HeadedRepeatCausalLinear):
                 # Kaiming He initialization for Swish activation
                 nn.init.kaiming_normal_(m.weight)
@@ -647,7 +645,7 @@ if __name__ == "__main__":
     #model = torch.compile(model)
 
     n_gpus = torch.cuda.device_count()
-    total_batch_size = 128
+    total_batch_size = 128 #  128
     batch_size = total_batch_size // n_gpus
     train_path = f"{data_root}/fineweb-edu-tokenized-train-c512"
     test_path = f"{data_root}/fineweb-edu-tokenized-test-c512"
