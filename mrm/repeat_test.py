@@ -118,7 +118,6 @@ class DiagonalCausalLinear(nn.Module):
         out = out.view(B, E, S)  # reshape back
         return out
 
-
 class ColRepeatCausalLinear(nn.Module):
 
     def __init__(self, dim: int):
@@ -200,11 +199,15 @@ class RowRepeatCausalLinear(nn.Module):
 
 class CombinedRepeatCausalLinear(nn.Module):
 
-    def __init__(self, dim: int):
+    def __init__(self, dim: int, decay_value=None):
 
         super().__init__()
         self.weight = nn.Parameter(torch.randn(2, dim))
         self.bias = nn.Parameter(torch.zeros(dim))
+        if decay_value is not None:
+            self.decay_value = nn.Parameter(torch.ones(2, 1))
+        else:
+            self.decay_value = None
 
     def vector_to_rowrepeat(self, v: torch.Tensor) -> torch.Tensor:
         """
@@ -221,9 +224,14 @@ class CombinedRepeatCausalLinear(nn.Module):
             torch.arange(m, device=v.device),
             indexing="ij",
         )
-        M = torch.where(
-            j >= i, v[i], torch.zeros(m, m, device=v.device, dtype=v.dtype)
-        )
+        if self.decay_value is not None:
+            M = torch.where(
+                j >= i, v[i]*self.decay_value[0]**(j-i), torch.zeros(m, m, device=v.device, dtype=v.dtype)
+            )
+        else:
+            M = torch.where(
+                j >= i, v[i], torch.zeros(m, m, device=v.device, dtype=v.dtype)
+            )
         return M
 
     def vector_to_colrepeat(self, v: torch.Tensor) -> torch.Tensor:
@@ -241,9 +249,14 @@ class CombinedRepeatCausalLinear(nn.Module):
             torch.arange(m, device=v.device),
             indexing="ij",
         )
-        M = torch.where(
-            j >= i, v[j], torch.zeros(m, m, device=v.device, dtype=v.dtype)
-        )
+        if self.decay_value is not None:
+            M = torch.where(
+                j >= i, v[j]*self.decay_value[1]**(j-i), torch.zeros(m, m, device=v.device, dtype=v.dtype)
+            )
+        else:
+            M = torch.where(
+                j >= i, v[j], torch.zeros(m, m, device=v.device, dtype=v.dtype)
+            )
         return M
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -422,7 +435,7 @@ class MixedRepeatHeads(nn.Module):
 
 class RepeatHeads(nn.Module):
 
-    def __init__(self, dim, seq_len, hidden_dim, n_heads, expanded_convs=False, combined_heads=False):
+    def __init__(self, dim, seq_len, hidden_dim, n_heads, expanded_convs=False, combined_heads=False, decay=decay):
         super().__init__()
         self.n_heads = n_heads
         self.proj_head = nn.ModuleList(
@@ -445,7 +458,7 @@ class RepeatHeads(nn.Module):
         else:
             if combined_heads:
                 self.mixer_heads = nn.ModuleList(
-                    [CombinedRepeatCausalLinear(seq_len) for i in range(n_heads)]
+                    [CombinedRepeatCausalLinear(seq_len, decay=decay) for i in range(n_heads)]
                 ).to(device)
             else:
                 self.mixer_heads = nn.ModuleList(
@@ -472,7 +485,7 @@ class RepeatHeads(nn.Module):
 
 class MixerBlock(nn.Module):
 
-    def __init__(self, hidden_dim: int, seq_len: int, expansion_factor=4, heads=None, kernel=1, expanded_convs=False, mixed_heads=False, combined_heads=False
+    def __init__(self, hidden_dim: int, seq_len: int, expansion_factor=4, heads=None, kernel=1, expanded_convs=False, mixed_heads=False, combined_heads=False, decay=False
     ):
 
         super().__init__()
@@ -508,7 +521,8 @@ class MixerBlock(nn.Module):
                     hidden_dim // heads,
                     heads,
                     expanded_convs=expanded_convs,
-                    combined_heads=combined_heads
+                    combined_heads=combined_heads,
+                    decay=decay
                 )  
 
         else:
@@ -553,7 +567,8 @@ class MLPMixer(nn.Module):
 	    expanded_convs=False,
         copy=False,
         mixed_heads=False,
-        combined_heads=False
+        combined_heads=False,
+        decay=False
     ):
 
         super(MLPMixer, self).__init__()
@@ -567,7 +582,7 @@ class MLPMixer(nn.Module):
         self.mixer_blocks = nn.ModuleList(
             [
                 MixerBlock(
-                    hidden_dim, seq_len, heads=heads, expanded_convs=expanded_convs, kernel=kernel, mixed_heads=mixed_heads, combined_heads=combined_heads
+                    hidden_dim, seq_len, heads=heads, expanded_convs=expanded_convs, kernel=kernel, mixed_heads=mixed_heads, combined_heads=combined_heads, decay=decay
                 )
                 for _ in range(num_blocks)
             ]
@@ -639,7 +654,7 @@ if __name__ == "__main__":
     kernel= 1
 
     model = MLPMixer(
-        n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, mixed_heads=False, combined_heads=True
+        n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, mixed_heads=False, combined_heads=True, decay=True
     ).float()
 
     #model = torch.compile(model)
