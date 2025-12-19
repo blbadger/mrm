@@ -226,7 +226,7 @@ class CombinedRepeatCausalLinear(nn.Module):
         )
         if self.decay_value is not None:
             M = torch.where(
-                j >= i, v[i]*self.decay_value[0]**(j-i), torch.zeros(m, m, device=v.device, dtype=v.dtype)
+                j >= i, v[i]*(torch.clip(self.decay_value[0], min=0.9, max=1))**((j-i)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
             )
         else:
             M = torch.where(
@@ -251,7 +251,7 @@ class CombinedRepeatCausalLinear(nn.Module):
         )
         if self.decay_value is not None:
             M = torch.where(
-                j >= i, v[j]*self.decay_value[1]**(j-i), torch.zeros(m, m, device=v.device, dtype=v.dtype)
+                j >= i, v[j]*(torch.clip(self.decay_value[1], min=0.9, max=1))**((j-i)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
             )
         else:
             M = torch.where(
@@ -435,7 +435,7 @@ class MixedRepeatHeads(nn.Module):
 
 class RepeatHeads(nn.Module):
 
-    def __init__(self, dim, seq_len, hidden_dim, n_heads, expanded_convs=False, combined_heads=False, decay=decay):
+    def __init__(self, dim, seq_len, hidden_dim, n_heads, expanded_convs=False, combined_heads=False, decay=False):
         super().__init__()
         self.n_heads = n_heads
         self.proj_head = nn.ModuleList(
@@ -458,7 +458,7 @@ class RepeatHeads(nn.Module):
         else:
             if combined_heads:
                 self.mixer_heads = nn.ModuleList(
-                    [CombinedRepeatCausalLinear(seq_len, decay=decay) for i in range(n_heads)]
+                    [CombinedRepeatCausalLinear(seq_len, decay_value=decay) for i in range(n_heads)]
                 ).to(device)
             else:
                 self.mixer_heads = nn.ModuleList(
@@ -664,7 +664,7 @@ if __name__ == "__main__":
     batch_size = total_batch_size // n_gpus
     train_path = f"{data_root}/fineweb-edu-tokenized-train-c512"
     test_path = f"{data_root}/fineweb-edu-tokenized-test-c512"
-    output_dir = f"{checkpoint_root}/fineweb_h{n_heads}_combinedrepeat_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
+    output_dir = f"{checkpoint_root}/fineweb_h{n_heads}_decay_combinedrepeat_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
     
     datasets.config.IN_MEMORY_MAX_SIZE = 1e9
     train_dataset = load_from_disk(train_path, keep_in_memory=None)
