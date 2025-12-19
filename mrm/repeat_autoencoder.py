@@ -25,7 +25,10 @@ class AutoencodingMixer(nn.Module):
 			random=False, 
 			frozen_encoder=None, 
 			clm_encoder=False,
-			frozen_toeplitz=False
+			frozen_toeplitz=False,
+			mixed_heads=False, 
+			combined_heads=False,
+			decay=False
 		):
 		super().__init__()
 		self.double_tokens = double_tokens
@@ -39,7 +42,7 @@ class AutoencodingMixer(nn.Module):
 			for _, param in frozen_encoder.named_parameters():
 				param.requires_grad = False
 			self.encoderblocks = frozen_encoder.model_blocks.to(device)
-			#self.wte = frozen_encoder.model_wte.to(device)
+
 		else:
 			if frozen_toeplitz:
 				self.encoderblocks = nn.ModuleList(
@@ -47,6 +50,9 @@ class AutoencodingMixer(nn.Module):
 					hidden_dim = dim,
 					seq_len = length,
 					heads = n_heads,
+					mixed_heads=mixer_heads, 
+					combined_heads=combined_heads,
+					decay=decay
 					)
 				for i in range(depth)]
 				).to(device)
@@ -56,6 +62,9 @@ class AutoencodingMixer(nn.Module):
 					hidden_dim = dim,
 					seq_len = length,
 					heads = n_heads,
+					mixed_heads=mixer_heads, 
+					combined_heads=combined_heads,
+					decay=decay
 					)
 				for i in range(depth)]
 				).to(device)
@@ -67,6 +76,9 @@ class AutoencodingMixer(nn.Module):
 					hidden_dim = dim,
 					seq_len = length,
 					heads = n_heads,
+					mixed_heads=mixer_heads, 
+					combined_heads=combined_heads,
+					decay=decay
 					)
 				for i in range(depth)]
 				).to(device)
@@ -76,6 +88,9 @@ class AutoencodingMixer(nn.Module):
 					hidden_dim = dim,
 					seq_len = length,
 					heads = n_heads,
+					mixed_heads=mixer_heads, 
+					combined_heads=combined_heads,
+					decay=decay
 					)
 				for i in range(depth)]
 				).to(device)
@@ -169,14 +184,14 @@ if __name__ == "__main__":
 	dim = 512
 	depth = 16
 	length = 512
-	compression = 1     
+	compression = 1
 	kernel = 1
 	heads = 4
-	model = AutoencodingMixer(vocab_size, dim, depth, length, n_heads=heads, kernel=kernel, compression=compression, frozen_toeplitz=False)
+	model = AutoencodingMixer(vocab_size, dim, depth, length, n_heads=heads, kernel=kernel, compression=compression, frozen_toeplitz=False, combined_heads=True, decay=True)
 	train_path = f"{data_root}/fineweb-edu-tokenized-train-c512"
 	test_path = f"{data_root}/fineweb-edu-tokenized-test-c512"
 
-	datasets.config.IN_MEMORY_MAX_SIZE = 50e9
+	datasets.config.IN_MEMORY_MAX_SIZE = 5e9
 	train_dataset = load_from_disk(train_path, keep_in_memory=None)
 	test_dataset = load_from_disk(test_path, keep_in_memory=None)
 	print(len(train_dataset), len(test_dataset))
@@ -189,7 +204,7 @@ if __name__ == "__main__":
 		n_devices = torch.cuda.device_count()
 
 	# descriptive name for output
-	output_dir = f'{checkpoint_root}/fineweb_autoencoding_repeat_h4\
+	output_dir = f'{checkpoint_root}/fineweb_autoencoding_combinedrepeat_decay_h4\
 _{dim}\
 _n{depth}\
 _c{length}_b{batch_size}x{n_devices}'
