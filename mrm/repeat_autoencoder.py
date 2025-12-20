@@ -50,7 +50,7 @@ class AutoencodingMixer(nn.Module):
 					hidden_dim = dim,
 					seq_len = length,
 					heads = n_heads,
-					mixed_heads=mixer_heads, 
+					mixed_heads=mixed_heads, 
 					combined_heads=combined_heads,
 					decay=decay
 					)
@@ -62,7 +62,7 @@ class AutoencodingMixer(nn.Module):
 					hidden_dim = dim,
 					seq_len = length,
 					heads = n_heads,
-					mixed_heads=mixer_heads, 
+					mixed_heads=mixed_heads, 
 					combined_heads=combined_heads,
 					decay=decay
 					)
@@ -76,7 +76,7 @@ class AutoencodingMixer(nn.Module):
 					hidden_dim = dim,
 					seq_len = length,
 					heads = n_heads,
-					mixed_heads=mixer_heads, 
+					mixed_heads=mixed_heads, 
 					combined_heads=combined_heads,
 					decay=decay
 					)
@@ -88,7 +88,7 @@ class AutoencodingMixer(nn.Module):
 					hidden_dim = dim,
 					seq_len = length,
 					heads = n_heads,
-					mixed_heads=mixer_heads, 
+					mixed_heads=mixed_heads, 
 					combined_heads=combined_heads,
 					decay=decay
 					)
@@ -187,7 +187,7 @@ if __name__ == "__main__":
 	compression = 1
 	kernel = 1
 	heads = 4
-	model = AutoencodingMixer(vocab_size, dim, depth, length, n_heads=heads, kernel=kernel, compression=compression, frozen_toeplitz=False, combined_heads=True, decay=True)
+	model = AutoencodingMixer(vocab_size, dim, depth, length, n_heads=heads, kernel=kernel, compression=compression, frozen_toeplitz=False, combined_heads=True, decay=False)
 	train_path = f"{data_root}/fineweb-edu-tokenized-train-c512"
 	test_path = f"{data_root}/fineweb-edu-tokenized-test-c512"
 
@@ -204,7 +204,7 @@ if __name__ == "__main__":
 		n_devices = torch.cuda.device_count()
 
 	# descriptive name for output
-	output_dir = f'{checkpoint_root}/fineweb_autoencoding_combinedrepeat_decay_h4\
+	output_dir = f'{checkpoint_root}/fineweb_autoencoding_combinedrepeat_h4\
 _{dim}\
 _n{depth}\
 _c{length}_b{batch_size}x{n_devices}'
