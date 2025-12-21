@@ -402,7 +402,7 @@ class ParallelRepeatHeads(nn.Module):
 
 class MixedRepeatHeads(nn.Module):
 
-    def __init__(self, dim: int, seq_len: int, hidden_dim: int, n_heads: int, expanded_convs: bool = False,
+    def __init__(self, dim: int, seq_len: int, hidden_dim: int, n_heads: int, expanded_convs=False, decay=False
     ):
         super().__init__()
         self.n_heads = n_heads
@@ -513,7 +513,8 @@ class MixerBlock(nn.Module):
                     hidden_dim // heads,
                     heads,
                     expanded_convs=expanded_convs,
-                    )
+                    decay=decay    
+                )
             else:
                 self.token_mixing_layer = RepeatHeads(
                     hidden_dim,
@@ -564,7 +565,7 @@ class MLPMixer(nn.Module):
         num_blocks: int,
         heads=None,
         kernel=1,
-	    expanded_convs=False,
+	expanded_convs=False,
         copy=False,
         mixed_heads=False,
         combined_heads=False,
@@ -654,7 +655,7 @@ if __name__ == "__main__":
     kernel= 1
 
     model = MLPMixer(
-        n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, mixed_heads=False, combined_heads=True, decay=True
+        n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, mixed_heads=True, combined_heads=False, decay=True
     ).float()
 
     #model = torch.compile(model)
@@ -664,7 +665,7 @@ if __name__ == "__main__":
     batch_size = total_batch_size // n_gpus
     train_path = f"{data_root}/fineweb-edu-tokenized-train-c512"
     test_path = f"{data_root}/fineweb-edu-tokenized-test-c512"
-    output_dir = f"{checkpoint_root}/fineweb_h{n_heads}_decay_combinedrepeat_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
+    output_dir = f"{checkpoint_root}/fineweb_h{n_heads}_decay_mixedrepeat_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
     
     datasets.config.IN_MEMORY_MAX_SIZE = 1e9
     train_dataset = load_from_disk(train_path, keep_in_memory=None)
