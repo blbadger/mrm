@@ -70,9 +70,9 @@ class RepeatCausalLinear(nn.Module):
         output += repeated_bias
         return output
 
-class DiagonalCausalLinear(nn.Module):
+class DiagonalColCausalLinear(nn.Module):
 
-    def __init__(self, dim: int):
+    def __init__(self, dim: int, decay=False):
 
         super().__init__()
 
@@ -80,6 +80,10 @@ class DiagonalCausalLinear(nn.Module):
         self.weight = nn.Parameter(torch.randn(1, dim))
         self.diag_weight = nn.Parameter(torch.randn(1, dim))
         self.bias = nn.Parameter(torch.zeros(dim))
+        if decay:
+            self.decay_value = nn.Parameter(torch.ones(2, 1))
+        else:
+            self.decay_value = None
 
     def vector_to_matrix(self, v: torch.Tensor, v2) -> torch.Tensor:
         """
@@ -98,7 +102,7 @@ class DiagonalCausalLinear(nn.Module):
             indexing="ij",
         )
         M = torch.where(
-            j > i, v[i], torch.zeros(m, m, device=v.device, dtype=v.dtype)
+            j > i, v[i]*(torch.clip(self.decay_value[1], min=0.9, max=1)**(j-i)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
         )
         M2 = torch.where(
             j == i, v2[j], torch.zeros(m, m, device=v2.device, dtype=v2.dtype)
@@ -118,15 +122,74 @@ class DiagonalCausalLinear(nn.Module):
         out = out.view(B, E, S)  # reshape back
         return out
 
+
+class ConstantDiagonalColCausalLinear(nn.Module):
+
+    def __init__(self, dim: int, decay=False):
+
+        super().__init__()
+
+        # Standard weight + bias
+        self.weight = nn.Parameter(torch.randn(1, dim))
+        self.diag_weight = nn.Parameter(torch.randn(1))
+        self.bias = nn.Parameter(torch.zeros(dim))
+        if decay:
+            self.decay_value = nn.Parameter(torch.ones(1))
+        else:
+            self.decay_value = None
+
+    def vector_to_matrix(self, v: torch.Tensor, v2) -> torch.Tensor:
+        """
+        [ x  b  c  d ]
+        [ 0  y  c  d ]
+        [ 0  0  z  d ]
+        [ 0  0  0  t ]
+        """
+        v = v.reshape(-1)  # Ensure v is a 1D tensor
+        v2 = v2.reshape(-1)
+        m = v.shape[0]
+        # Create index grids for rows and columns
+        i, j = torch.meshgrid(
+            torch.arange(m, device=v.device),
+            torch.arange(m, device=v.device),
+            indexing="ij",
+        )
+        M = torch.where(
+            j > i, v[i]*(torch.clip(self.decay_value, min=0.9, max=1)**(j-i)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
+        )
+        M2 = torch.where(
+            j == i, v2[0], torch.zeros(m, m, device=v2.device, dtype=v2.dtype)
+        )
+        M += M2
+        return M
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        x shape: (batch, embed_dim, seq_len)
+        """
+        B, E, S = x.shape
+        W = self.vector_to_matrix(self.weight, self.diag_weight)
+        x_reshaped = x.reshape(B * E, S)  # (B*E, S)
+        out = x_reshaped @ W  # (B*E, S)
+        out = out + self.bias  # broadcast bias
+        out = out.view(B, E, S)  # reshape back
+        return out
+
+
+
 class ColRepeatCausalLinear(nn.Module):
 
-    def __init__(self, dim: int):
+    def __init__(self, dim: int, decay=False):
 
         super().__init__()
 
         # Standard weight + bias
         self.weight = nn.Parameter(torch.randn(1, dim))
         self.bias = nn.Parameter(torch.zeros(dim))
+        if decay:
+            self.decay_value = nn.Parameter(torch.ones(1))
+        else:
+            self.decay_value = None
 
     def vector_to_matrix(self, v: torch.Tensor) -> torch.Tensor:
         """
@@ -143,9 +206,14 @@ class ColRepeatCausalLinear(nn.Module):
             torch.arange(m, device=v.device),
             indexing="ij",
         )
-        M = torch.where(
-            j >= i, v[j], torch.zeros(m, m, device=v.device, dtype=v.dtype)
-        )
+        if self.decay_value is not None:
+            M = torch.where(
+                j >= i, v[j]*(torch.clip(self.decay_value, min=0.9, max=1)**(j-i)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
+            )
+        else:
+            M = torch.where(
+                j >= i, v[j], torch.zeros(m, m, device=v.device, dtype=v.dtype)
+            )
         return M
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -160,18 +228,22 @@ class ColRepeatCausalLinear(nn.Module):
 
 class RowRepeatCausalLinear(nn.Module):
 
-    def __init__(self, dim: int):
+    def __init__(self, dim: int, decay=False):
 
         super().__init__()
 
         # Standard weight + bias
         self.weight = nn.Parameter(torch.randn(1, dim))
         self.bias = nn.Parameter(torch.zeros(dim))
+        if decay:
+            self.decay_value = nn.Parameter(torch.ones(1))
+        else:
+            self.decay_value = None
 
     def vector_to_matrix(self, v: torch.Tensor) -> torch.Tensor:
         """
-        [ a  b  c  d ]
-        [ 0  b  c  d ]
+        [ a  a  a  a ]
+        [ 0  b  b  b ]
         [ 0  0  c  d ]
         [ 0  0  0  d ]
         """
@@ -183,9 +255,14 @@ class RowRepeatCausalLinear(nn.Module):
             torch.arange(m, device=v.device),
             indexing="ij",
         )
-        M = torch.where(
-            j >= i, v[i], torch.zeros(m, m, device=v.device, dtype=v.dtype)
-        )
+        if self.decay_value is not None:
+            M = torch.where(
+                j >= i, v[i]*(torch.clip(self.decay_value, min=0.9, max=1)**(j-i)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
+            )
+        else:
+            M = torch.where(
+                j >= i, v[i], torch.zeros(m, m, device=v.device, dtype=v.dtype)
+            )
         return M
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -199,12 +276,12 @@ class RowRepeatCausalLinear(nn.Module):
 
 class CombinedRepeatCausalLinear(nn.Module):
 
-    def __init__(self, dim: int, decay_value=None):
+    def __init__(self, dim: int, decay=None):
 
         super().__init__()
         self.weight = nn.Parameter(torch.randn(2, dim))
         self.bias = nn.Parameter(torch.zeros(dim))
-        if decay_value is not None:
+        if decay:
             self.decay_value = nn.Parameter(torch.ones(2, 1))
         else:
             self.decay_value = None
@@ -226,7 +303,7 @@ class CombinedRepeatCausalLinear(nn.Module):
         )
         if self.decay_value is not None:
             M = torch.where(
-                j >= i, v[i]*(torch.clip(self.decay_value[0], min=0.9, max=1))**((j-i)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
+                j >= i, v[i]*(torch.clip(self.decay_value[0], min=0.9, max=1)**(j-i)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
             )
         else:
             M = torch.where(
@@ -236,9 +313,9 @@ class CombinedRepeatCausalLinear(nn.Module):
 
     def vector_to_colrepeat(self, v: torch.Tensor) -> torch.Tensor:
         """
-        [ a  a  a  a ]
-        [ 0  b  b  b ]
-        [ 0  0  c  c ]
+        [ a  b  c  d ]
+        [ 0  b  c  d ]
+        [ 0  0  c  d ]
         [ 0  0  0  d ]
         """
         v = v.reshape(-1)  # Ensure v is a 1D tensor
@@ -251,7 +328,7 @@ class CombinedRepeatCausalLinear(nn.Module):
         )
         if self.decay_value is not None:
             M = torch.where(
-                j >= i, v[j]*(torch.clip(self.decay_value[1], min=0.9, max=1))**((j-i)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
+                j >= i, v[j]*(torch.clip(self.decay_value[1], min=0.9, max=1)**(j-i)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
             )
         else:
             M = torch.where(
@@ -402,8 +479,7 @@ class ParallelRepeatHeads(nn.Module):
 
 class MixedRepeatHeads(nn.Module):
 
-    def __init__(self, dim: int, seq_len: int, hidden_dim: int, n_heads: int, expanded_convs=False, decay=False
-    ):
+    def __init__(self, dim: int, seq_len: int, hidden_dim: int, n_heads: int, expanded_convs=False, decay=False):
         super().__init__()
         self.n_heads = n_heads
         self.proj_head = nn.ModuleList(
@@ -413,7 +489,7 @@ class MixedRepeatHeads(nn.Module):
         self.out_proj = nn.Linear(dim, dim)
 
         self.mixer_heads = nn.ModuleList(
-            [ColRepeatCausalLinear(seq_len) for i in range(n_heads//2)] + [RowRepeatCausalLinear(seq_len) for i in range(n_heads//2)]
+            [ColRepeatCausalLinear(seq_len, decay) for i in range(n_heads//2)] + [RowRepeatCausalLinear(seq_len, decay) for i in range(n_heads//2)]
         ).to(device)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -458,7 +534,7 @@ class RepeatHeads(nn.Module):
         else:
             if combined_heads:
                 self.mixer_heads = nn.ModuleList(
-                    [CombinedRepeatCausalLinear(seq_len, decay_value=decay) for i in range(n_heads)]
+                    [CombinedRepeatCausalLinear(seq_len, decay=decay) for i in range(n_heads)]
                 ).to(device)
             else:
                 self.mixer_heads = nn.ModuleList(
@@ -538,7 +614,7 @@ class MixerBlock(nn.Module):
                 self.token_mixing_layer = KernelRepeatLinear(seq_len, kernel=kernel)
             else:
                 # flat mixer layer
-                self.token_mixing_layer = RepeatCausalLinear(seq_len)  # type: ignore[assignment]
+                self.token_mixing_layer = RepeatCausalLinear(seq_len) 
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         res = x
@@ -598,7 +674,7 @@ class MLPMixer(nn.Module):
     def _init_weights(self):
         for m in self.modules():
             if isinstance(m, nn.Linear) or isinstance(m, ColRepeatCausalLinear) or isinstance(m, RowRepeatCausalLinear) or isinstance(m, CombinedRepeatCausalLinear) \
-            or isinstance(m, DiagonalCausalLinear) or isinstance(m, KernelRepeatLinear) or isinstance(m, HeadedRepeatCausalLinear):
+            or isinstance(m, DiagonalColCausalLinear) or isinstance(m, KernelRepeatLinear) or isinstance(m, HeadedRepeatCausalLinear):
                 # Kaiming He initialization for Swish activation
                 nn.init.kaiming_normal_(m.weight)
                 if m.bias is not None:
@@ -649,7 +725,7 @@ if __name__ == "__main__":
     print("Vocab size: ", n_vocab)
 
     tokenized_length = 512
-    dim = 512
+    dim = 1024
     layers = 16
     n_heads = 4
     kernel= 1
@@ -708,4 +784,4 @@ if __name__ == "__main__":
     shutil.copy(code_path, output_dir) 
 
     model.train()
-    trainer.train()
+    trainer.train(output_dir + '/checkpoint-24000')
