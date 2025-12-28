@@ -9,82 +9,83 @@ import mlflow
 import os
 from dotenv import load_dotenv
 import shutil
-from repeat_test import RepeatHeads, RepeatCausalLinear, DiagonalCausalLinear, KernelRepeatLinear
+
+# from repeat_test import RepeatHeads, RepeatCausalLinear, DiagonalCausalLinear, KernelRepeatLinear
 
 all_hammings = []
 hamming_log =[]
 
 
-class MixerBlock(nn.Module):
+# class MixerBlock(nn.Module):
 
-    def __init__(
-        self,
-        hidden_dim: int,
-        seq_len: int,
-        expansion_factor: int = 4,
-        dropout: float = 0.,
-        heads=None,
-        expanded_convs=False,
-    ):
+#     def __init__(
+#         self,
+#         hidden_dim: int,
+#         seq_len: int,
+#         expansion_factor: int = 4,
+#         dropout: float = 0.,
+#         heads=None,
+#         expanded_convs=False,
+#     ):
 
-        super().__init__()
+#         super().__init__()
 
-        self.hidden_dim = hidden_dim
-        self.seq_len = seq_len
-        self.expansion_factor = expansion_factor
+#         self.hidden_dim = hidden_dim
+#         self.seq_len = seq_len
+#         self.expansion_factor = expansion_factor
 
-        # channel-norm
-        self.channel_norm = nn.LayerNorm(hidden_dim)
+#         # channel-norm
+#         self.channel_norm = nn.LayerNorm(hidden_dim)
 
-        # channel-mixing layer
-        self.channel_mixing_layer = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim * expansion_factor),
-            nn.SiLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim * expansion_factor, hidden_dim),
-        )
+#         # channel-mixing layer
+#         self.channel_mixing_layer = nn.Sequential(
+#             nn.Linear(hidden_dim, hidden_dim * expansion_factor),
+#             nn.SiLU(),
+#             nn.Dropout(dropout),
+#             nn.Linear(hidden_dim * expansion_factor, hidden_dim),
+#         )
 
-        # token-norm
-        self.token_norm = nn.LayerNorm(hidden_dim)
-        if heads and heads > 0:
-            self.token_mixing_layer = RepeatHeads(
-                hidden_dim,
-                seq_len,
-                hidden_dim // heads,
-                heads,
-                expanded_convs=expanded_convs,
-            )  # type: ignore[assignment]
+#         # token-norm
+#         self.token_norm = nn.LayerNorm(hidden_dim)
+#         if heads and heads > 0:
+#             self.token_mixing_layer = RepeatHeads(
+#                 hidden_dim,
+#                 seq_len,
+#                 hidden_dim // heads,
+#                 heads,
+#                 expanded_convs=expanded_convs,
+#             )  # type: ignore[assignment]
 
-        else:
-            if expanded_convs:
-                # token-mixing layer
-                self.token_mixing_layer = nn.Sequential(
-                    RepeatCausalLinear(seq_len),
-                    nn.SiLU(),
-                    nn.Dropout(dropout),
-                    RepeatCausalLinear(seq_len),
-                )  # type: ignore[assignment]
+#         else:
+#             if expanded_convs:
+#                 # token-mixing layer
+#                 self.token_mixing_layer = nn.Sequential(
+#                     RepeatCausalLinear(seq_len),
+#                     nn.SiLU(),
+#                     nn.Dropout(dropout),
+#                     RepeatCausalLinear(seq_len),
+#                 )  # type: ignore[assignment]
 
-            else:
-                # flat mixer layer
-                self.token_mixing_layer = KernelRepeatLinear(seq_len, 1)  # type: ignore[assignment]
+#             else:
+#                 # flat mixer layer
+#                 self.token_mixing_layer = KernelRepeatLinear(seq_len, 1)  # type: ignore[assignment]
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        res = x
-        x = self.channel_norm(x)
-        x = self.channel_mixing_layer(x)
-        x = x + res
+#     def forward(self, x: torch.Tensor) -> torch.Tensor:
+#         res = x
+#         x = self.channel_norm(x)
+#         x = self.channel_mixing_layer(x)
+#         x = x + res
 
-        res = x
-        x = self.token_norm(x)
-        x = x.transpose(1, 2)
-        x = self.token_mixing_layer(x)
-        x = x.transpose(1, 2)
-        x = x + res
-        return x
+#         res = x
+#         x = self.token_norm(x)
+#         x = x.transpose(1, 2)
+#         x = self.token_mixing_layer(x)
+#         x = x.transpose(1, 2)
+#         x = x + res
+#         return x
 
 
-class MLPMixer(nn.Module):
+class CopyMixer(nn.Module):
 
     def __init__(
         self,
@@ -96,6 +97,9 @@ class MLPMixer(nn.Module):
         expanded_convs=False,
         copy=False,
         tie_io=False,
+        mixed_heads=False,
+        combined_heads=False,
+        decay=False
     ):
 
         super(MLPMixer, self).__init__()
@@ -110,11 +114,15 @@ class MLPMixer(nn.Module):
 
         # Mixer Blocks
         self.mixer_blocks = nn.ModuleList(
-            [
-                MixerBlock(
-                    hidden_dim, seq_len, heads=heads, expanded_convs=expanded_convs
-                )
-                for _ in range(num_blocks)
+            [MixerBlock(
+                    hidden_dim = dim,
+                    seq_len = length,
+                    heads = n_heads,
+                    mixed_heads=mixed_heads, 
+                    combined_heads=combined_heads,
+                    decay=decay
+                    )
+                for i in range(depth)
             ]
         )
 
@@ -234,22 +242,18 @@ if __name__ == "__main__":
     print("Vocab size: ", n_vocab)
 
     tokenized_length = 1024
-    dim = 128
+    dim = 512
     layers = 16
     n_heads = None
 
-    model = MLPMixer(
-        n_vocab, dim, tokenized_length, layers, heads=n_heads, expanded_convs=False, copy=True
-    ).float()
+    model = AutoencodingMixer(vocab_size, dim, depth, length, n_heads=heads, kernel=kernel, compression=compression, 
+        frozen_toeplitz=False, mixed_heads=True, combined_heads=False, decay=True).float()
 
-    #model = FrozenMixer(
-    #   n_vocab, dim, tokenized_length, layers, heads=n_heads, expanded_convs=False, copy=True
-    #).float()
 
     train_path = f"{data_root}/fineweb-edu-tokenized-train-c1024"
     test_path = f"{data_root}/fineweb-edu-tokenized-test-c1024"
     
-    output_dir = f"{checkpoint_root}/fineweb_copy_colrepeat_extended_{dim}_n{layers}_b64x4"
+    output_dir = f"{checkpoint_root}/fineweb_copy_repeat_mixed_decay_{dim}_n{layers}_b16x4"
     datasets.config.IN_MEMORY_MAX_SIZE = 50e9
     train_dataset = load_from_disk(train_path, keep_in_memory=None)
     test_dataset = load_from_disk(test_path, keep_in_memory=None).filter(lambda x: x['input_ids'][-1] != 1).take(5000)
@@ -260,12 +264,12 @@ if __name__ == "__main__":
     print(model)
     training_arguments = transformers.TrainingArguments(
         num_train_epochs=2,
-        per_device_train_batch_size=64,
-        per_device_eval_batch_size=64,
+        per_device_train_batch_size=16,
+        per_device_eval_batch_size=16,
         #gradient_accumulation_steps=2,
         warmup_steps=50,
-        eval_steps=4000,
-        save_steps=8000,
+        eval_steps=100,
+        save_steps=10000,
         learning_rate=5e-4,
         fp16=True,
         eval_strategy="steps",
@@ -273,9 +277,9 @@ if __name__ == "__main__":
         optim="adamw_torch",
         overwrite_output_dir=True,
         save_safetensors=True,
-        max_steps=200000,
+        max_steps=10000,
         torch_compile=True,
-        max_grad_norm=200.0
+        # max_grad_norm=200.0
     )
 
     trainer = transformers.Trainer(
