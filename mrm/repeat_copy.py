@@ -9,8 +9,8 @@ import mlflow
 import os
 from dotenv import load_dotenv
 import shutil
-
-# from repeat_test import RepeatHeads, RepeatCausalLinear, DiagonalCausalLinear, KernelRepeatLinear
+from repeat_test import MixerBlock
+from repeat_test import *
 
 all_hammings = []
 hamming_log =[]
@@ -102,7 +102,7 @@ class CopyMixer(nn.Module):
         decay=False
     ):
 
-        super(MLPMixer, self).__init__()
+        super().__init__()
 
         self.vocab_size = vocab_size
         self.hidden_dim = hidden_dim
@@ -115,14 +115,14 @@ class CopyMixer(nn.Module):
         # Mixer Blocks
         self.mixer_blocks = nn.ModuleList(
             [MixerBlock(
-                    hidden_dim = dim,
-                    seq_len = length,
-                    heads = n_heads,
+                    hidden_dim=hidden_dim,
+                    seq_len=seq_len,
+                    heads = heads,
                     mixed_heads=mixed_heads, 
                     combined_heads=combined_heads,
                     decay=decay
                     )
-                for i in range(depth)
+                for i in range(num_blocks)
             ]
         )
 
@@ -134,17 +134,17 @@ class CopyMixer(nn.Module):
             self.output_layer.weight = self.input_layer.weight
 
         # Initialize weights
-        self._init_weights()
+        #self._init_weights()
 
         # Define loss function
         self.loss_fn = nn.CrossEntropyLoss()
         self.copy = copy
 
     def _init_weights(self):
-
         for m in self.modules():
-            if isinstance(m, nn.Linear) or isinstance(m, RepeatCausalLinear) or isinstance(m, KernelRepeatLinear):
-                # Kaiming He initialization for Swish activation
+            if isinstance(m, nn.Linear) or isinstance(m, ColRepeatCausalLinear) or isinstance(m, RowRepeatCausalLinear) or isinstance(m, CombinedRepeatCausalLinear) \
+            or isinstance(m, DiagonalColCausalLinear) or isinstance(m, KernelRepeatLinear) or isinstance(m, HeadedRepeatCausalLinear):
+               # Kaiming He initialization for Swish activation
                 nn.init.kaiming_normal_(m.weight)
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
@@ -242,19 +242,19 @@ if __name__ == "__main__":
     print("Vocab size: ", n_vocab)
 
     tokenized_length = 1024
-    dim = 512
+    dim = 256
     layers = 16
-    n_heads = None
+    n_heads = 4
 
-    model = AutoencodingMixer(vocab_size, dim, depth, length, n_heads=heads, kernel=kernel, compression=compression, 
-        frozen_toeplitz=False, mixed_heads=True, combined_heads=False, decay=True).float()
+    model = CopyMixer(n_vocab, dim,  tokenized_length, layers, heads=n_heads, 
+        mixed_heads=True, combined_heads=False, decay=False)
 
 
     train_path = f"{data_root}/fineweb-edu-tokenized-train-c1024"
     test_path = f"{data_root}/fineweb-edu-tokenized-test-c1024"
     
-    output_dir = f"{checkpoint_root}/fineweb_copy_repeat_mixed_decay_{dim}_n{layers}_b16x4"
-    datasets.config.IN_MEMORY_MAX_SIZE = 50e9
+    output_dir = f"{checkpoint_root}/fineweb_copy_repeat_mixed_h4_{dim}_n{layers}_b16x4"
+    datasets.config.IN_MEMORY_MAX_SIZE = 5e9
     train_dataset = load_from_disk(train_path, keep_in_memory=None)
     test_dataset = load_from_disk(test_path, keep_in_memory=None).filter(lambda x: x['input_ids'][-1] != 1).take(5000)
     print(len(train_dataset), len(test_dataset))
@@ -270,7 +270,7 @@ if __name__ == "__main__":
         warmup_steps=50,
         eval_steps=100,
         save_steps=10000,
-        learning_rate=5e-4,
+        learning_rate=2e-4,
         fp16=True,
         eval_strategy="steps",
         output_dir=output_dir,
