@@ -645,7 +645,7 @@ class MLPMixer(nn.Module):
 
     def _init_weights(self):
         for m in self.modules():
-            if isinstance(m, nn.Linear) or isinstance(m, DiagonalColCausalLinear) or isinstance(m, DiagonalRowCausalLinear) or isinstance(m, CombinedDiagonalCausalLinear) \
+            if isinstance(m, nn.Linear) or isinstance(m, DiagonalColCausalLinear) or isinstance(m, DiagonalRowCausalLinear) or isinstance(m, CombinedDiagonalRepeatCausalLinear) \
             or isinstance(m, DiagonalRowCausalLinear) or isinstance(m, KernelRepeatLinear) or isinstance(m, HeadedRepeatCausalLinear) or isinstance(m, ConstDiagonalColCausalLinear) \
             or isinstance(m, ConstDiagonalRowCausalLinear):
                 # Kaiming He initialization for Swish activation
