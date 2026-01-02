@@ -22,7 +22,7 @@ class DiagonalColCausalLinear(nn.Module):
         self.diag_weight = nn.Parameter(torch.randn(1, dim))
         self.bias = nn.Parameter(torch.zeros(dim))
         if decay:
-            self.decay_value = nn.Parameter(torch.ones(2, 1))
+            self.decay_value = nn.Parameter(torch.ones(1))
         else:
             self.decay_value = None
 
@@ -61,7 +61,7 @@ class DiagonalColCausalLinear(nn.Module):
         x shape: (batch, embed_dim, seq_len)
         """
         B, E, S = x.shape
-        W = self.vector_to_matrix(self.weight, self.diag_weight)
+        W = self.vector_to_matrix(self.weight, self.diag_weight).to(x.dtype)
         x_reshaped = x.reshape(B * E, S)  # (B*E, S)
         out = x_reshaped @ W  # (B*E, S)
         out = out + self.bias  # broadcast bias
@@ -79,7 +79,7 @@ class DiagonalRowCausalLinear(nn.Module):
         self.diag_weight = nn.Parameter(torch.randn(1, dim))
         self.bias = nn.Parameter(torch.zeros(dim))
         if decay:
-            self.decay_value = nn.Parameter(torch.ones(2, 1))
+            self.decay_value = nn.Parameter(torch.ones(1))
         else:
             self.decay_value = None
 
@@ -118,7 +118,7 @@ class DiagonalRowCausalLinear(nn.Module):
         x shape: (batch, embed_dim, seq_len)
         """
         B, E, S = x.shape
-        W = self.vector_to_matrix(self.weight, self.diag_weight)
+        W = self.vector_to_matrix(self.weight, self.diag_weight).to(x.dtype)
         x_reshaped = x.reshape(B * E, S)  # (B*E, S)
         out = x_reshaped @ W  # (B*E, S)
         out = out + self.bias  # broadcast bias
@@ -166,7 +166,7 @@ class ConstDiagonalColCausalLinear(nn.Module):
                 j > i, v[j], torch.zeros(m, m, device=v.device, dtype=v.dtype)
             )
         M2 = torch.where(
-            j == i, v2[0], torch.zeros(m, m, device=v2.device, dtype=v2.dtype)
+            j == i, v2[0], torch.zeros(m, m, device=v.device, dtype=v.dtype)
         )
         M += M2
         return M
@@ -176,10 +176,10 @@ class ConstDiagonalColCausalLinear(nn.Module):
         x shape: (batch, embed_dim, seq_len)
         """
         B, E, S = x.shape
-        W = self.vector_to_matrix(self.weight, self.diag_weight)
+        W = self.vector_to_matrix(self.weight, self.diag_weight).to(x.dtype)
         x_reshaped = x.reshape(B * E, S)  # (B*E, S)
         out = x_reshaped @ W  # (B*E, S)
-        out = out + self.bias  # broadcast bias
+        out = out + self.bias.to(x.dtype)  # broadcast bias
         out = out.view(B, E, S)  # reshape back
         return out
 
@@ -225,7 +225,7 @@ class ConstDiagonalRowCausalLinear(nn.Module):
             )
 
         M2 = torch.where(
-            j == i, v2[0], torch.zeros(m, m, device=v2.device, dtype=v2.dtype)
+            j == i, v2[0], torch.zeros(m, m, device=v.device, dtype=v.dtype)
         )
         M += M2
         return M
@@ -235,10 +235,10 @@ class ConstDiagonalRowCausalLinear(nn.Module):
         x shape: (batch, embed_dim, seq_len)
         """
         B, E, S = x.shape
-        W = self.vector_to_matrix(self.weight, self.diag_weight)
+        W = self.vector_to_matrix(self.weight, self.diag_weight).to(x.dtype)
         x_reshaped = x.reshape(B * E, S)  # (B*E, S)
         out = x_reshaped @ W  # (B*E, S)
-        out = out + self.bias  # broadcast bias
+        out = out + self.bias.to(x.dtype)  # broadcast bias
         out = out.view(B, E, S)  # reshape back
         return out
 
@@ -257,10 +257,10 @@ class CombinedDiagonalRepeatCausalLinear(nn.Module):
 
     def vector_to_rowrepeat(self, v: torch.Tensor) -> torch.Tensor:
         """
-        [ a  a  a  a ]
-        [ 0  b  b  b ]
-        [ 0  0  c  c ]
-        [ 0  0  0  d ]
+        [ 0  a  a  a ]
+        [ 0  0  b  b ]
+        [ 0  0  0  c ]
+        [ 0  0  0  0 ]
         """
         v = v.reshape(-1)  # Ensure v is a 1D tensor
         m = v.shape[0]
@@ -461,7 +461,7 @@ class MixedRepeatHeads(nn.Module):
         self.out_proj = nn.Linear(dim, dim)
 
         self.mixer_heads = nn.ModuleList(
-            [DiagonalColCausalLinear(seq_len, decay) for i in range(n_heads//2)] + [DiagonalRowCausalLinear(seq_len, decay) for i in range(n_heads//2)]
+            [ConstDiagonalColCausalLinear(seq_len, decay) for i in range(n_heads//2)] + [ConstDiagonalRowCausalLinear(seq_len, decay) for i in range(n_heads//2)]
         ).to(device)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -710,11 +710,11 @@ if __name__ == "__main__":
     #model = torch.compile(model)
 
     n_gpus = torch.cuda.device_count()
-    total_batch_size = 128  #  128
+    total_batch_size = 128  #128 for nctx=512, 64 for nctx=128
     batch_size = total_batch_size // n_gpus
     train_path = f"{data_root}/fineweb-edu-tokenized-train-c512"
     test_path = f"{data_root}/fineweb-edu-tokenized-test-c512"
-    output_dir = f"{checkpoint_root}/fineweb_h{n_heads}_diagonal_decay_mixed_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
+    output_dir = f"{checkpoint_root}/fineweb_h{n_heads}_constdiagonal_decay_mixed_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
     
     datasets.config.IN_MEMORY_MAX_SIZE = 1e9
     train_dataset = load_from_disk(train_path, keep_in_memory=None)
@@ -757,4 +757,4 @@ if __name__ == "__main__":
     shutil.copy(code_path, output_dir) 
 
     model.train()
-    trainer.train(output_dir + '/checkpoint-24000')
+    trainer.train(output_dir + '/checkpoint-144000')
