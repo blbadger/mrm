@@ -230,6 +230,7 @@ def copy_labels(labels):
         halves = torch.cat((pad_half, first_half))
         labels[i] = halves
     return labels
+
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 if __name__ == "__main__":
@@ -300,3 +301,9 @@ if __name__ == "__main__":
     model.train()
     trainer.train()
     print (hamming_log)
+    log_path = output_dir + '/evaluation_accuracies.json'
+    print (f'Saving hamming log to {log_path}')
+    evaluation_accuracy = {"Accuracies": hamming_log}
+    with open(log_path, 'w') as f:
+        json.dump(evaluation_accuracy, f)
+
