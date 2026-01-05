@@ -134,7 +134,7 @@ class CopyMixer(nn.Module):
             self.output_layer.weight = self.input_layer.weight
 
         # Initialize weights
-        #self._init_weights()
+        self._init_weights()
 
         # Define loss function
         self.loss_fn = nn.CrossEntropyLoss()
@@ -248,13 +248,12 @@ if __name__ == "__main__":
     n_heads = 4
 
     model = CopyMixer(n_vocab, dim,  tokenized_length, layers, heads=n_heads, 
-        mixed_heads=True, combined_heads=False, decay=False)
-
+        mixed_heads=False, combined_heads=False, decay=False)
 
     train_path = f"{data_root}/fineweb-edu-tokenized-train-c1024"
     test_path = f"{data_root}/fineweb-edu-tokenized-test-c1024"
     
-    output_dir = f"{checkpoint_root}/fineweb_copy_repeat_mixed_h4_{dim}_n{layers}_b16x4"
+    output_dir = f"{checkpoint_root}/fineweb_copy_parallel_noproj_repeat_mixed_h4_{dim}_n{layers}_b16x4"
     datasets.config.IN_MEMORY_MAX_SIZE = 5e9
     train_dataset = load_from_disk(train_path, keep_in_memory=None)
     test_dataset = load_from_disk(test_path, keep_in_memory=None).filter(lambda x: x['input_ids'][-1] != 1).take(5000)

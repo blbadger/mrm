@@ -446,12 +446,13 @@ class HeadedRepeatCausalLinear(nn.Module):
         return M
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x.to(device)
+        x = x.to(device) # x has shape [b * h, e, t]
+        # W has shape [h, t, t] and is repeated to make [b * h, t, t]
         W = self.vector_to_matrix(self.weight).repeat(x.shape[0]//self.heads, 1, 1) 
         output = torch.bmm(x, W)
-        repeated_bias = self.bias.repeat(x.shape[0]//self.heads, 1)
-        repeated_bias = repeated_bias.unsqueeze(1).repeat(1, x.shape[1], 1)
-        output += repeated_bias
+        repeated_bias = self.bias.repeat(x.shape[0]//self.heads, 1) # [h, t] repeated to [b * h, t]
+        repeated_bias = repeated_bias.unsqueeze(1).repeat(1, x.shape[1], 1) # repeated to [b * h, e, t]
+        output += self.bias.repeat(x.shape[0], x.shape[0]//self.heads, 1)
         return output
 
 class ParallelRepeatHeads(nn.Module):
@@ -473,11 +474,11 @@ class ParallelRepeatHeads(nn.Module):
     
     def forward(self, x:torch.Tensor) -> torch.Tensor:
         x = rearrange(x, "b e t -> b t e")
-        headed_projection = self.in_proj(x) 
+        headed_projection = x # self.in_proj(x) 
         projections = rearrange(headed_projection, "b t (h e) -> (b h) e t", h=self.n_heads)
         conv_projection = self.mixer_heads(projections)
         rearranged_conv = rearrange(conv_projection, "(b h) e t -> b t (h e)", h=self.n_heads)
-        output = self.out_proj(rearranged_conv)
+        output = rearranged_conv # self.out_proj(rearranged_conv)
         output = rearrange(output, "b t e -> b e t")
         return output
 
@@ -746,7 +747,7 @@ if __name__ == "__main__":
     train_path = f"{data_root}/fineweb-edu-tokenized-train-c512"
     test_path = f"{data_root}/fineweb-edu-tokenized-test-c512"
     output_dir = f"{checkpoint_root}/fineweb_h{n_heads}_parallel_mixed_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
-    
+  
     datasets.config.IN_MEMORY_MAX_SIZE = 1e9
     train_dataset = load_from_disk(train_path, keep_in_memory=None)
     test_dataset = load_from_disk(test_path, keep_in_memory=None)
