@@ -474,11 +474,11 @@ class ParallelRepeatHeads(nn.Module):
     
     def forward(self, x:torch.Tensor) -> torch.Tensor:
         x = rearrange(x, "b e t -> b t e")
-        headed_projection = x # self.in_proj(x) 
+        headed_projection = self.in_proj(x) 
         projections = rearrange(headed_projection, "b t (h e) -> (b h) e t", h=self.n_heads)
         conv_projection = self.mixer_heads(projections)
         rearranged_conv = rearrange(conv_projection, "(b h) e t -> b t (h e)", h=self.n_heads)
-        output = rearranged_conv # self.out_proj(rearranged_conv)
+        output = self.out_proj(rearranged_conv)
         output = rearrange(output, "b t e -> b e t")
         return output
 
@@ -619,7 +619,7 @@ class MixerBlock(nn.Module):
                 self.token_mixing_layer = KernelRepeatLinear(seq_len, kernel=kernel)
             else:
                 # flat mixer layer
-                self.token_mixing_layer = RepeatCausalLinear(seq_len) 
+                self.token_mixing_layer = ColRepeatCausalLinear(seq_len) 
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         res = x

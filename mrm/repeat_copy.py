@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 import shutil
 from repeat_test import MixerBlock
 from repeat_test import *
+import json
 
 all_hammings = []
 hamming_log =[]
@@ -94,6 +95,7 @@ class CopyMixer(nn.Module):
         seq_len: int,
         num_blocks: int,
         heads=None,
+        kernel=1,
         expanded_convs=False,
         copy=False,
         tie_io=False,
@@ -118,6 +120,7 @@ class CopyMixer(nn.Module):
                     hidden_dim=hidden_dim,
                     seq_len=seq_len,
                     heads = heads,
+                    kernel = kernel,
                     mixed_heads=mixed_heads, 
                     combined_heads=combined_heads,
                     decay=decay
@@ -166,7 +169,7 @@ class CopyMixer(nn.Module):
 
         global all_hammings
         if not self.training:
-            all_hammings.append(hamming(logits, labels))
+            all_hammings.append(hamming(logits, labels).item())
         if self.training and all_hammings: 
             print (f'Accuracy: {sum(all_hammings)/ len(all_hammings)}')
             global hamming_log; hamming_log.append(sum(all_hammings)/ len(all_hammings))
@@ -245,15 +248,16 @@ if __name__ == "__main__":
     tokenized_length = 1024
     dim = 256
     layers = 16
-    n_heads = 4
+    n_heads = None
+    kernel = 16
 
-    model = CopyMixer(n_vocab, dim,  tokenized_length, layers, heads=n_heads, 
+    model = CopyMixer(n_vocab, dim,  tokenized_length, layers, kernel=kernel, heads=n_heads, 
         mixed_heads=False, combined_heads=False, decay=False)
 
     train_path = f"{data_root}/fineweb-edu-tokenized-train-c1024"
     test_path = f"{data_root}/fineweb-edu-tokenized-test-c1024"
     
-    output_dir = f"{checkpoint_root}/fineweb_copy_parallel_noproj_repeat_mixed_h4_{dim}_n{layers}_b16x4"
+    output_dir = f"{checkpoint_root}/fineweb_copy_repeat_k16_{dim}_n{layers}_b16x4"
     datasets.config.IN_MEMORY_MAX_SIZE = 5e9
     train_dataset = load_from_disk(train_path, keep_in_memory=None)
     test_dataset = load_from_disk(test_path, keep_in_memory=None).filter(lambda x: x['input_ids'][-1] != 1).take(5000)
