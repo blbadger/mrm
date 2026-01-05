@@ -698,7 +698,7 @@ if __name__ == "__main__":
     print("Vocab size: ", n_vocab)
 
     tokenized_length = 512
-    dim = 512
+    dim = 1024
     layers = 16
     n_heads = 4
     kernel= 1
@@ -714,7 +714,7 @@ if __name__ == "__main__":
     batch_size = total_batch_size // n_gpus
     train_path = f"{data_root}/fineweb-edu-tokenized-train-c512"
     test_path = f"{data_root}/fineweb-edu-tokenized-test-c512"
-    output_dir = f"{checkpoint_root}/fineweb_h{n_heads}_constdiagonal_decay_mixed_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
+    output_dir = f"{checkpoint_root}/fineweb_h{n_heads}_constdiagonal_mixed_decay_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
     
     datasets.config.IN_MEMORY_MAX_SIZE = 1e9
     train_dataset = load_from_disk(train_path, keep_in_memory=None)
@@ -757,4 +757,4 @@ if __name__ == "__main__":
     shutil.copy(code_path, output_dir) 
 
     model.train()
-    trainer.train(output_dir + '/checkpoint-144000')
+    trainer.train()

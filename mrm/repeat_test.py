@@ -409,22 +409,22 @@ class HeadedRepeatCausalLinear(nn.Module):
     def vector_to_matrix(self, v: torch.Tensor) -> torch.Tensor:
         """
         Given a matrix v of shape (k, m) and head number h >= 0, 
-        returns an (k x m x m) matrix M where M[i, j] = v[j - i] if 
+        returns an (k x m x m) matrix M where M[i, j] = v[i] if 
         j >= i, and 0 otherwise.
 
         For example, if v = [[a, b, c, d], [e, f, g, h]], k=2 then M will be:
 
         [[
-            [ a  b  c  d ]
-            [ 0  a  b  c ]
-            [ 0  0  a  b ]
-            [ 0  0  0  a ]
+            [ a  a  a  a ]
+            [ 0  b  b  b ]
+            [ 0  0  c  c ]
+            [ 0  0  0  d ]
         ],
         [
-            [ e  f  g  h ]
-            [ 0  e  f  g ]
-            [ 0  0  e  f ]
-            [ 0  0  0  e ]
+            [ a  b  c  d ]
+            [ 0  b  c  d ]
+            [ 0  0  c  d ]
+            [ 0  0  0  d ]
         ]]
 
         """
@@ -437,10 +437,12 @@ class HeadedRepeatCausalLinear(nn.Module):
             torch.arange(m, device=v.device),
             indexing="ij",
         )
-        # j - i gives the offset into v. When j < i, we want a 0.
         M = torch.where(
-            j >= i, v[..., j - i], torch.zeros(m, m, device=v.device, dtype=v.dtype)
+            j >= i, v[:self.heads//2, j], torch.zeros(m, m, device=v.device, dtype=v.dtype)
         )
+        M = torch.cat((M, torch.where(
+            j >= i, v[self.heads//2:, i], torch.zeros(m, m, device=v.device, dtype=v.dtype)
+        )), dim=0)
         return M
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -458,14 +460,16 @@ class ParallelRepeatHeads(nn.Module):
         self,
         dim: int,
         seq_len: int,
+        hidden_dim: int,
         n_heads: int,
+        **kwargs
     ):
         # note that the hidden dim is by definition dim // n_heads
         super().__init__()
         self.n_heads = n_heads
         self.in_proj = nn.Linear(dim, dim)
         self.out_proj = nn.Linear(dim, dim)
-        self.mixer_heads = HeadedToeplitzCausalLinear(seq_len, n_heads)
+        self.mixer_heads = HeadedRepeatCausalLinear(seq_len, n_heads)
     
     def forward(self, x:torch.Tensor) -> torch.Tensor:
         x = rearrange(x, "b e t -> b t e")
@@ -592,7 +596,7 @@ class MixerBlock(nn.Module):
                     decay=decay    
                 )
             else:
-                self.token_mixing_layer = RepeatHeads(
+                self.token_mixing_layer = ParallelRepeatHeads(
                     hidden_dim,
                     seq_len,
                     hidden_dim // heads,
@@ -725,13 +729,13 @@ if __name__ == "__main__":
     print("Vocab size: ", n_vocab)
 
     tokenized_length = 512
-    dim = 1024
+    dim = 512
     layers = 16
     n_heads = 4
     kernel= 1
 
     model = MLPMixer(
-        n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, mixed_heads=True, combined_heads=False, decay=True
+        n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, mixed_heads=False, combined_heads=False, decay=False
     ).float()
 
     #model = torch.compile(model)
@@ -741,7 +745,7 @@ if __name__ == "__main__":
     batch_size = total_batch_size // n_gpus
     train_path = f"{data_root}/fineweb-edu-tokenized-train-c512"
     test_path = f"{data_root}/fineweb-edu-tokenized-test-c512"
-    output_dir = f"{checkpoint_root}/fineweb_h{n_heads}_decay_mixedrepeat_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
+    output_dir = f"{checkpoint_root}/fineweb_h{n_heads}_parallel_mixed_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
     
     datasets.config.IN_MEMORY_MAX_SIZE = 1e9
     train_dataset = load_from_disk(train_path, keep_in_memory=None)
@@ -784,4 +788,4 @@ if __name__ == "__main__":
     shutil.copy(code_path, output_dir) 
 
     model.train()
-    trainer.train(output_dir + '/checkpoint-24000')
+    trainer.train()
