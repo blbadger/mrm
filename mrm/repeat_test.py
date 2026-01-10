@@ -57,7 +57,7 @@ class RepeatCausalLinear(nn.Module):
         )
         # j - i gives the offset into v. When j < i, we want a 0.
         M = torch.where(
-            j >= i, v[..., j - i], torch.zeros(m, m, device=v.device, dtype=v.dtype)
+            j >= i, v[..., j], torch.zeros(m, m, device=v.device, dtype=v.dtype)
         )
         return M
 
@@ -474,11 +474,11 @@ class ParallelRepeatHeads(nn.Module):
     
     def forward(self, x:torch.Tensor) -> torch.Tensor:
         x = rearrange(x, "b e t -> b t e")
-        headed_projection = self.in_proj(x) 
+        headed_projection = x# self.in_proj(x) 
         projections = rearrange(headed_projection, "b t (h e) -> (b h) e t", h=self.n_heads)
         conv_projection = self.mixer_heads(projections)
         rearranged_conv = rearrange(conv_projection, "(b h) e t -> b t (h e)", h=self.n_heads)
-        output = self.out_proj(rearranged_conv)
+        output = rearranged_conv #self.out_proj(rearranged_conv)
         output = rearrange(output, "b t e -> b e t")
         return output
 
@@ -597,7 +597,7 @@ class MixerBlock(nn.Module):
                     decay=decay    
                 )
             else:
-                self.token_mixing_layer = ParallelRepeatHeads(
+                self.token_mixing_layer = RepeatHeads(
                     hidden_dim,
                     seq_len,
                     hidden_dim // heads,
@@ -619,7 +619,7 @@ class MixerBlock(nn.Module):
                 self.token_mixing_layer = KernelRepeatLinear(seq_len, kernel=kernel)
             else:
                 # flat mixer layer
-                self.token_mixing_layer = ColRepeatCausalLinear(seq_len) 
+                self.token_mixing_layer = ParallelRepeatCausalLinear(seq_len) 
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         res = x
