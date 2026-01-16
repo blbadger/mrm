@@ -179,7 +179,7 @@ class ConstantDiagonalColCausalLinear(nn.Module):
 
 class ColRepeatCausalLinear(nn.Module):
 
-    def __init__(self, dim: int, decay=False):
+    def __init__(self, dim: int, decay=False, decay_constant=1):
 
         super().__init__()
 
@@ -188,6 +188,7 @@ class ColRepeatCausalLinear(nn.Module):
         self.bias = nn.Parameter(torch.zeros(dim))
         if decay:
             self.decay_value = nn.Parameter(torch.ones(1))
+            self.decay_constant = decay_constant
         else:
             self.decay_value = None
 
@@ -208,7 +209,7 @@ class ColRepeatCausalLinear(nn.Module):
         )
         if self.decay_value is not None:
             M = torch.where(
-                j >= i, v[j]*(torch.clip(self.decay_value, min=0.9, max=1)**((j-i)/2)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
+                j >= i, v[j]*(torch.clip(self.decay_value, min=0.9, max=1)**((j-i)/self.decay_constant)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
             )
         else:
             M = torch.where(
@@ -257,7 +258,7 @@ class RowRepeatCausalLinear(nn.Module):
         )
         if self.decay_value is not None:
             M = torch.where(
-                j >= i, v[i]*(torch.clip(self.decay_value, min=0.9, max=1)**((j-i)/2)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
+                j >= i, v[i]*(torch.clip(self.decay_value, min=0.9, max=1)**((j-i)/self.decay_constant)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
             )
         else:
             M = torch.where(
@@ -276,13 +277,14 @@ class RowRepeatCausalLinear(nn.Module):
 
 class CombinedRepeatCausalLinear(nn.Module):
 
-    def __init__(self, dim: int, decay=None):
+    def __init__(self, dim: int, decay=None, decay_constant=1):
 
         super().__init__()
         self.weight = nn.Parameter(torch.randn(2, dim))
         self.bias = nn.Parameter(torch.zeros(dim))
         if decay:
             self.decay_value = nn.Parameter(torch.ones(2, 1))
+            self.decay_constant = decay_constant
         else:
             self.decay_value = None
 
@@ -302,8 +304,9 @@ class CombinedRepeatCausalLinear(nn.Module):
             indexing="ij",
         )
         if self.decay_value is not None:
+            # NB: 0.95 min, decay_constant=4 for copy
             M = torch.where(
-                j >= i, v[i]*(torch.clip(self.decay_value[0], min=0.95, max=1)**((j-i))/4), torch.zeros(m, m, device=v.device, dtype=v.dtype)
+                j >= i, v[i]*(torch.clip(self.decay_value[0], min=0.9, max=1)**((j-i))/self.decay_constant), torch.zeros(m, m, device=v.device, dtype=v.dtype)
             )
         else:
             M = torch.where(
@@ -327,8 +330,9 @@ class CombinedRepeatCausalLinear(nn.Module):
             indexing="ij",
         )
         if self.decay_value is not None:
+            # NB: 0.95 min, decay_constant=4 for copy
             M = torch.where(
-                j >= i, v[j]*(torch.clip(self.decay_value[1], min=0.95, max=1)**((j-i)/4)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
+                j >= i, v[j]*(torch.clip(self.decay_value[1], min=0.9, max=1)**((j-i)/self.decay_constant)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
             )
         else:
             M = torch.where(
@@ -463,6 +467,7 @@ class ParallelRepeatHeads(nn.Module):
         seq_len: int,
         hidden_dim: int,
         n_heads: int,
+        use_projs=True
         **kwargs
     ):
         # note that the hidden dim is by definition dim // n_heads
@@ -471,14 +476,17 @@ class ParallelRepeatHeads(nn.Module):
         self.in_proj = nn.Linear(dim, dim)
         self.out_proj = nn.Linear(dim, dim)
         self.mixer_heads = HeadedRepeatCausalLinear(seq_len, n_heads)
+        self.use_projs = use_projs
     
     def forward(self, x:torch.Tensor) -> torch.Tensor:
         x = rearrange(x, "b e t -> b t e")
-        headed_projection = x# self.in_proj(x) 
-        projections = rearrange(headed_projection, "b t (h e) -> (b h) e t", h=self.n_heads)
+        if self.use_projs:
+            x = self.in_proj(x)
+        projections = rearrange(x, "b t (h e) -> (b h) e t", h=self.n_heads)
         conv_projection = self.mixer_heads(projections)
-        rearranged_conv = rearrange(conv_projection, "(b h) e t -> b t (h e)", h=self.n_heads)
-        output = rearranged_conv #self.out_proj(rearranged_conv)
+        output = rearrange(conv_projection, "(b h) e t -> b t (h e)", h=self.n_heads)
+        if self.use_projs:
+            output = self.out_proj(output)
         output = rearrange(output, "b t e -> b e t")
         return output
 
@@ -539,7 +547,7 @@ class RepeatHeads(nn.Module):
         else:
             if combined_heads:
                 self.mixer_heads = nn.ModuleList(
-                    [CombinedRepeatCausalLinear(seq_len, decay=decay) for i in range(n_heads)]
+                    [CombinedRepeatCausalLinear(seq_len, decay=decay, decay_constant=seq_len//512) for i in range(n_heads)]
                 ).to(device)
             else:
                 self.mixer_heads = nn.ModuleList(
