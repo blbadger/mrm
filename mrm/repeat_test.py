@@ -208,7 +208,7 @@ class ColRepeatCausalLinear(nn.Module):
         )
         if self.decay_value is not None:
             M = torch.where(
-                j >= i, v[j]*(torch.clip(self.decay_value, min=0.9, max=1)**(j-i)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
+                j >= i, v[j]*(torch.clip(self.decay_value, min=0.9, max=1)**((j-i)/2)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
             )
         else:
             M = torch.where(
@@ -257,7 +257,7 @@ class RowRepeatCausalLinear(nn.Module):
         )
         if self.decay_value is not None:
             M = torch.where(
-                j >= i, v[i]*(torch.clip(self.decay_value, min=0.9, max=1)**(j-i)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
+                j >= i, v[i]*(torch.clip(self.decay_value, min=0.9, max=1)**((j-i)/2)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
             )
         else:
             M = torch.where(
@@ -303,7 +303,7 @@ class CombinedRepeatCausalLinear(nn.Module):
         )
         if self.decay_value is not None:
             M = torch.where(
-                j >= i, v[i]*(torch.clip(self.decay_value[0], min=0.9, max=1)**(j-i)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
+                j >= i, v[i]*(torch.clip(self.decay_value[0], min=0.95, max=1)**((j-i))/4), torch.zeros(m, m, device=v.device, dtype=v.dtype)
             )
         else:
             M = torch.where(
@@ -328,7 +328,7 @@ class CombinedRepeatCausalLinear(nn.Module):
         )
         if self.decay_value is not None:
             M = torch.where(
-                j >= i, v[j]*(torch.clip(self.decay_value[1], min=0.9, max=1)**(j-i)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
+                j >= i, v[j]*(torch.clip(self.decay_value[1], min=0.95, max=1)**((j-i)/4)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
             )
         else:
             M = torch.where(
