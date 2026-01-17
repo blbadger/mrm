@@ -26,25 +26,10 @@ class RepeatCausalLinear(nn.Module):
 
     def vector_to_matrix(self, v: torch.Tensor) -> torch.Tensor:
         """
-        Given a matrix v of shape (k, m) and head number h >= 0, 
-        returns an (k x m x m) matrix M where M[i, j] = v[j - i] if 
-        j >= i, and 0 otherwise.
-
-        For example, if v = [[a, b, c, d], [e, f, g, h]], k=2 then M will be:
-
-        [[
-            [ a  b  c  d ]
-            [ 0  a  b  c ]
-            [ 0  0  a  b ]
-            [ 0  0  0  a ]
-        ],
-        [
-            [ e  f  g  h ]
-            [ 0  e  f  g ]
-            [ 0  0  e  f ]
-            [ 0  0  0  e ]
-        ]]
-
+        [ a  b  c  d]
+        [ 0  b  c  d]
+        [ 0  0  c  d]
+        [ 0  0  0  d]
         """
         # Expects v is a preformed tensor with shape [k, D]
         m = v.shape[-1] # vector shape
@@ -356,7 +341,7 @@ class KernelRepeatLinear(nn.Module):
     A linear layer with a triangular (causal) mask applied to the weight matrix.
     This ensures each position i cannot use info from positions > i.
     """
-    def __init__(self, dim: int, kernel: int):
+    def __init__(self, dim: int, kernel: int, decay=False, decay_constant=1):
 
         super().__init__()
 
@@ -364,10 +349,15 @@ class KernelRepeatLinear(nn.Module):
         self.weight = nn.Parameter(torch.randn(kernel, dim))
         self.bias = nn.Parameter(torch.zeros(dim))
         self.kernel = kernel
+        if decay:
+            self.decay_value = nn.Parameter(torch.ones(2, 1))
+            self.decay_constant = decay_constant
+        else:
+            self.decay_value = None
 
     def vector_to_matrix(self, v: torch.Tensor) -> torch.Tensor:
 
-	# Expects v is a preformed tensor with shape [k, D]
+	   # Expects v is a preformed tensor with shape [k, D]
         m = v.shape[-1] # vector shape
 
         # Create index grids for rows and columns
@@ -376,12 +366,16 @@ class KernelRepeatLinear(nn.Module):
             torch.arange(m, device=v.device),
             indexing="ij",
         )
-        # j - i gives the offset into v. When j < i, we want a 0.
-        M = torch.where(
-            j >= i, v[..., j], torch.zeros(m, m, device=v.device, dtype=v.dtype)
-        )
+        if self.decay_value is not None:
+            # NB: 0.95 min, decay_constant=4 for copy
+            M = torch.where(
+                j >= i, v[j]*(torch.clip(self.decay_value[1], min=0.9, max=1)**((j-i)/self.decay_constant)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
+            )
+        else:
+            M = torch.where(
+                j >= i, v[j], torch.zeros(m, m, device=v.device, dtype=v.dtype)
+            )
         return M
-
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x.to(device)
@@ -398,10 +392,10 @@ class KernelRepeatLinear(nn.Module):
 
 class HeadedRepeatCausalLinear(nn.Module):
     """
-    Multi-headed parallelized implementation
+    Mixed-headed repeat module for ParallelRepeatHeads
     """
 
-    def __init__(self, dim: int, heads: int):
+    def __init__(self, dim: int, heads: int, decay=False, decay_constant=1):
 
         super().__init__()
 
@@ -409,6 +403,11 @@ class HeadedRepeatCausalLinear(nn.Module):
         self.weight = nn.Parameter(torch.randn(heads, dim))
         self.bias = nn.Parameter(torch.zeros(heads, dim))
         self.heads = heads
+        if decay:
+            self.decay_value = nn.Parameter(torch.ones(2, 1))
+            self.decay_constant = decay_constant
+        else:
+            self.decay_value = None
 
     def vector_to_matrix(self, v: torch.Tensor) -> torch.Tensor:
         """
@@ -441,12 +440,21 @@ class HeadedRepeatCausalLinear(nn.Module):
             torch.arange(m, device=v.device),
             indexing="ij",
         )
-        M = torch.where(
-            j >= i, v[:self.heads//2, j], torch.zeros(m, m, device=v.device, dtype=v.dtype)
-        )
-        M = torch.cat((M, torch.where(
-            j >= i, v[self.heads//2:, i], torch.zeros(m, m, device=v.device, dtype=v.dtype)
-        )), dim=0)
+        if self.decay_value is not None:
+            M = torch.where(
+                j >= i, v[:self.heads//2, j]*(torch.clip(self.decay_value[1], min=0.9, max=1)**((j-i)/self.decay_constant)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
+            )
+            M = torch.cat((M, torch.where(
+                j >= i, v[self.heads//2:, i]*(torch.clip(self.decay_value[1], min=0.9, max=1)**((j-i)/self.decay_constant)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
+            )), dim=0)
+        else:
+            M = torch.where(
+                j >= i, v[:self.heads//2, j], torch.zeros(m, m, device=v.device, dtype=v.dtype)
+            )
+            M = torch.cat((M, torch.where(
+                j >= i, v[self.heads//2:, i], torch.zeros(m, m, device=v.device, dtype=v.dtype)
+            )), dim=0)
+
         return M
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -467,7 +475,8 @@ class ParallelRepeatHeads(nn.Module):
         seq_len: int,
         hidden_dim: int,
         n_heads: int,
-        use_projs=True
+        use_projections=True,
+        decay=False
         **kwargs
     ):
         # note that the hidden dim is by definition dim // n_heads
@@ -475,8 +484,8 @@ class ParallelRepeatHeads(nn.Module):
         self.n_heads = n_heads
         self.in_proj = nn.Linear(dim, dim)
         self.out_proj = nn.Linear(dim, dim)
-        self.mixer_heads = HeadedRepeatCausalLinear(seq_len, n_heads)
-        self.use_projs = use_projs
+        self.mixer_heads = HeadedRepeatCausalLinear(seq_len, n_heads, decay=decay, decay_constant=seq_len//512)
+        self.use_projections = use_projections
     
     def forward(self, x:torch.Tensor) -> torch.Tensor:
         x = rearrange(x, "b e t -> b t e")
@@ -502,7 +511,7 @@ class MixedRepeatHeads(nn.Module):
         self.out_proj = nn.Linear(dim, dim)
 
         self.mixer_heads = nn.ModuleList(
-            [ColRepeatCausalLinear(seq_len, decay) for i in range(n_heads//2)] + [RowRepeatCausalLinear(seq_len, decay) for i in range(n_heads//2)]
+            [ColRepeatCausalLinear(seq_len, decay=decay, decay_constant=seq_len//512) for i in range(n_heads//2)] + [RowRepeatCausalLinear(seq_len, decay=decay, decay_constant=seq_len//512) for i in range(n_heads//2)]
         ).to(device)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -530,7 +539,6 @@ class RepeatHeads(nn.Module):
         self.proj_head = nn.ModuleList(
             [nn.Linear(dim, hidden_dim) for i in range(n_heads)]
         ).to(device)
-
         self.out_proj = nn.Linear(dim, dim)
 
         if expanded_convs:
@@ -574,8 +582,7 @@ class RepeatHeads(nn.Module):
 
 class MixerBlock(nn.Module):
 
-    def __init__(self, hidden_dim: int, seq_len: int, expansion_factor=4, heads=None, kernel=1, expanded_convs=False, mixed_heads=False, combined_heads=False, decay=False
-    ):
+    def __init__(self, hidden_dim: int, seq_len: int, expansion_factor=4, heads=None, kernel=1, expanded_convs=False, mixed_heads=False, combined_heads=False, decay=False, use_projections=True):
 
         super().__init__()
         self.hidden_dim = hidden_dim
@@ -595,7 +602,16 @@ class MixerBlock(nn.Module):
         # token-norm
         self.token_norm = nn.LayerNorm(hidden_dim)
         if heads is not None and heads > 0:
-            if mixed_heads:
+            if parallel_heads:
+                # flat mixer layer
+                self.token_mixing_layer = ParallelRepeatHeads(
+                    hidden_dim,
+                    seq_len, 
+                    heads,
+                    use_projections=use_projections, 
+                    decay=decay
+                ) 
+            elif mixed_heads:
                 self.token_mixing_layer = MixedRepeatHeads(
                     hidden_dim,
                     seq_len,
@@ -624,10 +640,9 @@ class MixerBlock(nn.Module):
                     RepeatCausalLinear(seq_len),
                 ) 
             elif kernel is not None and kernel > 1:
-                self.token_mixing_layer = KernelRepeatLinear(seq_len, kernel=kernel)
+                self.token_mixing_layer = KernelRepeatLinear(seq_len, kernel=kernel, decay=decay)
             else:
-                # flat mixer layer
-                self.token_mixing_layer = ParallelRepeatCausalLinear(seq_len) 
+                self.token_mixing_layer = RowRepeatCausalLinear(seq_len, heads=1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         res = x
@@ -654,7 +669,7 @@ class MLPMixer(nn.Module):
         num_blocks: int,
         heads=None,
         kernel=1,
-	expanded_convs=False,
+	    expanded_convs=False,
         copy=False,
         mixed_heads=False,
         combined_heads=False,
