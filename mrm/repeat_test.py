@@ -579,15 +579,18 @@ class RepeatHeads(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         activations = []
-        x = rearrange(x, "b e t -> b t e")
+        if self.use_projections:
+            x = rearrange(x, "b e t -> b t e")
         # pre-concatenated out projection
         for head in range(self.n_heads):
             if self.use_projections:
                 projection = self.proj_head[head](x)
+                projection = rearrange(projection, "b t e -> b e t")
             else:
-                projection = x[:, :, head*self.hidden_dim: (head+1)*self.hidden_dim]
+                projection = x[:, head*self.hidden_dim: (head+1)*self.hidden_dim, :]
+                if torch.is_autocast_enabled():
+                    projection = projection.to(torch.float16)
 
-            projection = rearrange(projection, "b t e -> b e t")
             conv_projection = self.mixer_heads[head](projection)
             rearranged_conv = rearrange(conv_projection, "b e t -> b t e")
             activations.append(rearranged_conv)
