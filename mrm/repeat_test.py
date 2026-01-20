@@ -214,7 +214,7 @@ class ColRepeatCausalLinear(nn.Module):
 
 class RowRepeatCausalLinear(nn.Module):
 
-    def __init__(self, dim: int, decay=False):
+    def __init__(self, dim: int, decay=False, decay_constant=1):
 
         super().__init__()
 
@@ -223,6 +223,7 @@ class RowRepeatCausalLinear(nn.Module):
         self.bias = nn.Parameter(torch.zeros(dim))
         if decay:
             self.decay_value = nn.Parameter(torch.ones(1))
+            self.decay_constant = decay_constant
         else:
             self.decay_value = None
 
@@ -369,11 +370,11 @@ class KernelRepeatLinear(nn.Module):
         if self.decay_value is not None:
             # NB: 0.95 min, decay_constant=4 for copy
             M = torch.where(
-                j >= i, v[j]*(torch.clip(self.decay_value[1], min=0.9, max=1)**((j-i)/self.decay_constant)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
+                j >= i, v[..., j]*(torch.clip(self.decay_value[1], min=0.9, max=1)**((j-i)/self.decay_constant)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
             )
         else:
             M = torch.where(
-                j >= i, v[j], torch.zeros(m, m, device=v.device, dtype=v.dtype)
+                j >= i, v[..., j], torch.zeros(m, m, device=v.device, dtype=v.dtype)
             )
         return M
 
@@ -464,7 +465,7 @@ class HeadedRepeatCausalLinear(nn.Module):
         output = torch.bmm(x, W)
         repeated_bias = self.bias.repeat(x.shape[0]//self.heads, 1) # [h, t] repeated to [b * h, t]
         repeated_bias = repeated_bias.unsqueeze(1).repeat(1, x.shape[1], 1) # repeated to [b * h, e, t]
-        output += self.bias.repeat(x.shape[0], x.shape[0]//self.heads, 1)
+        output += repeated_bias
         return output
 
 class ParallelRepeatHeads(nn.Module):
@@ -476,7 +477,7 @@ class ParallelRepeatHeads(nn.Module):
         hidden_dim: int,
         n_heads: int,
         use_projections=True,
-        decay=False
+        decay=False,
         **kwargs
     ):
         # note that the hidden dim is by definition dim // n_heads
@@ -489,57 +490,71 @@ class ParallelRepeatHeads(nn.Module):
     
     def forward(self, x:torch.Tensor) -> torch.Tensor:
         x = rearrange(x, "b e t -> b t e")
-        if self.use_projs:
+        if self.use_projections:
             x = self.in_proj(x)
         projections = rearrange(x, "b t (h e) -> (b h) e t", h=self.n_heads)
         conv_projection = self.mixer_heads(projections)
         output = rearrange(conv_projection, "(b h) e t -> b t (h e)", h=self.n_heads)
-        if self.use_projs:
+        if self.use_projections:
             output = self.out_proj(output)
         output = rearrange(output, "b t e -> b e t")
         return output
 
 class MixedRepeatHeads(nn.Module):
 
-    def __init__(self, dim: int, seq_len: int, hidden_dim: int, n_heads: int, expanded_convs=False, decay=False):
+    def __init__(self, dim: int, seq_len: int, hidden_dim: int, n_heads: int, expanded_convs=False, decay=False, use_projections=True):
         super().__init__()
         self.n_heads = n_heads
-        self.proj_head = nn.ModuleList(
-            [nn.Linear(dim, hidden_dim) for i in range(n_heads)]
-        ).to(device)
+        self.use_projections = use_projections
+        if use_projections:
+            self.proj_head = nn.ModuleList(
+                [nn.Linear(dim, hidden_dim) for i in range(n_heads)]
+            )
+            self.out_proj = nn.Linear(dim, dim)
 
-        self.out_proj = nn.Linear(dim, dim)
-
+        self.hidden_dim = hidden_dim
         self.mixer_heads = nn.ModuleList(
             [ColRepeatCausalLinear(seq_len, decay=decay, decay_constant=seq_len//512) for i in range(n_heads//2)] + [RowRepeatCausalLinear(seq_len, decay=decay, decay_constant=seq_len//512) for i in range(n_heads//2)]
-        ).to(device)
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         activations = []
-        x = rearrange(x, "b e t -> b t e")
+        if self.use_projections:
+            x = rearrange(x, "b e t -> b t e")
         # pre-concatenated out projection
         for head in range(self.n_heads):
-            projection = self.proj_head[head](x)
-            projection = rearrange(projection, "b t e -> b e t")
+            if self.use_projections:
+                projection = self.proj_head[head](x)
+                projection = rearrange(projection, "b t e -> b e t")
+            else:
+                projection = x[:, head*self.hidden_dim: (head+1)*self.hidden_dim, :]
+                if torch.is_autocast_enabled():
+                    projection = projection.to(torch.float16)
+
             conv_projection = self.mixer_heads[head](projection)
             rearranged_conv = rearrange(conv_projection, "b e t -> b t e")
             activations.append(rearranged_conv)
 
         # concatenate and project multi-headed output
         hidden_layer = torch.cat(activations, dim=2)
-        hidden_layer = self.out_proj(hidden_layer)
+        if self.use_projections:
+            hidden_layer = self.out_proj(hidden_layer)
+
         hidden_layer = rearrange(hidden_layer, "b t e -> b e t")
         return hidden_layer
 
 class RepeatHeads(nn.Module):
 
-    def __init__(self, dim, seq_len, hidden_dim, n_heads, expanded_convs=False, combined_heads=False, decay=False):
+    def __init__(self, dim, seq_len, hidden_dim, n_heads, expanded_convs=False, combined_heads=False, use_projections=True, decay=False):
         super().__init__()
         self.n_heads = n_heads
-        self.proj_head = nn.ModuleList(
-            [nn.Linear(dim, hidden_dim) for i in range(n_heads)]
-        ).to(device)
-        self.out_proj = nn.Linear(dim, dim)
+        self.use_projections = use_projections
+        self.hidden_dim = hidden_dim
+        if self.use_projections:
+            self.proj_head = nn.ModuleList(
+                [nn.Linear(dim, hidden_dim) for i in range(n_heads)]
+            ).to(device)
+            self.out_proj = nn.Linear(dim, dim)
 
         if expanded_convs:
             self.mixer_heads = nn.ModuleList(
@@ -567,7 +582,11 @@ class RepeatHeads(nn.Module):
         x = rearrange(x, "b e t -> b t e")
         # pre-concatenated out projection
         for head in range(self.n_heads):
-            projection = self.proj_head[head](x)
+            if self.use_projections:
+                projection = self.proj_head[head](x)
+            else:
+                projection = x[:, :, head*self.hidden_dim: (head+1)*self.hidden_dim]
+
             projection = rearrange(projection, "b t e -> b e t")
             conv_projection = self.mixer_heads[head](projection)
             rearranged_conv = rearrange(conv_projection, "b e t -> b t e")
@@ -575,14 +594,15 @@ class RepeatHeads(nn.Module):
 
         # concatenate and project multi-headed output
         hidden_layer = torch.cat(activations, dim=2)
-        hidden_layer = self.out_proj(hidden_layer)
+        if self.use_projections:
+            hidden_layer = self.out_proj(hidden_layer)
         hidden_layer = rearrange(hidden_layer, "b t e -> b e t")
         return hidden_layer
 
 
 class MixerBlock(nn.Module):
 
-    def __init__(self, hidden_dim: int, seq_len: int, expansion_factor=4, heads=None, kernel=1, expanded_convs=False, mixed_heads=False, combined_heads=False, decay=False, use_projections=True):
+    def __init__(self, hidden_dim: int, seq_len: int, expansion_factor=4, heads=None, kernel=1, expanded_convs=False, mixed_heads=False, combined_heads=False, decay=False, parallel_heads=False, use_projections=True):
 
         super().__init__()
         self.hidden_dim = hidden_dim
@@ -607,6 +627,7 @@ class MixerBlock(nn.Module):
                 self.token_mixing_layer = ParallelRepeatHeads(
                     hidden_dim,
                     seq_len, 
+                    hidden_dim // heads,
                     heads,
                     use_projections=use_projections, 
                     decay=decay
@@ -617,6 +638,7 @@ class MixerBlock(nn.Module):
                     seq_len,
                     hidden_dim // heads,
                     heads,
+                    use_projections=use_projections,
                     expanded_convs=expanded_convs,
                     decay=decay    
                 )
@@ -640,7 +662,7 @@ class MixerBlock(nn.Module):
                     RepeatCausalLinear(seq_len),
                 ) 
             elif kernel is not None and kernel > 1:
-                self.token_mixing_layer = KernelRepeatLinear(seq_len, kernel=kernel, decay=decay)
+                self.token_mixing_layer = KernelRepeatLinear(seq_len, kernel=kernel, decay=decay, decay_constant=seq_len//256)
             else:
                 self.token_mixing_layer = RowRepeatCausalLinear(seq_len, heads=1)
 
@@ -669,11 +691,13 @@ class MLPMixer(nn.Module):
         num_blocks: int,
         heads=None,
         kernel=1,
-	    expanded_convs=False,
+	expanded_convs=False,
         copy=False,
         mixed_heads=False,
         combined_heads=False,
-        decay=False
+        decay=False,
+        parallel_heads=False,
+        use_projections=True
     ):
 
         super(MLPMixer, self).__init__()
@@ -687,7 +711,7 @@ class MLPMixer(nn.Module):
         self.mixer_blocks = nn.ModuleList(
             [
                 MixerBlock(
-                    hidden_dim, seq_len, heads=heads, expanded_convs=expanded_convs, kernel=kernel, mixed_heads=mixed_heads, combined_heads=combined_heads, decay=decay
+                    hidden_dim, seq_len, heads=heads, expanded_convs=expanded_convs, kernel=kernel, mixed_heads=mixed_heads, combined_heads=combined_heads, decay=decay, parallel_heads=parallel_heads, use_projections=use_projections
                 )
                 for _ in range(num_blocks)
             ]
@@ -759,8 +783,7 @@ if __name__ == "__main__":
     kernel= 1
 
     model = MLPMixer(
-        n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, mixed_heads=False, combined_heads=False, decay=False
-    ).float()
+        n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=False)
 
     #model = torch.compile(model)
 
@@ -769,7 +792,7 @@ if __name__ == "__main__":
     batch_size = total_batch_size // n_gpus
     train_path = f"{data_root}/fineweb-edu-tokenized-train-c512"
     test_path = f"{data_root}/fineweb-edu-tokenized-test-c512"
-    output_dir = f"{checkpoint_root}/fineweb_h{n_heads}_parallel_mixed_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
+    output_dir = f"{checkpoint_root}/fineweb_h{n_heads}_decay_nonparallel_mixed_noprojs_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
   
     datasets.config.IN_MEMORY_MAX_SIZE = 1e9
     train_dataset = load_from_disk(train_path, keep_in_memory=None)
@@ -798,7 +821,7 @@ if __name__ == "__main__":
     )
 
     trainer = transformers.Trainer(
-        model=model.to("cuda"),  # pre-assignment for FSDP initialization
+        model=model,
         train_dataset=train_dataset,
         eval_dataset=test_dataset,
         args=training_arguments,
