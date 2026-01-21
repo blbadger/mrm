@@ -17,34 +17,31 @@ class AutoencodingMixer(nn.Module):
 			dim, 
 			depth, 
 			length, 
-			compression=1, 
-			double_tokens=False, 
+			compression=1,
 			kernel=1, 
 			n_heads=0, 
 			unroll=True, 
 			random=False, 
 			frozen_encoder=None, 
 			clm_encoder=False,
-			frozen_toeplitz=False,
+			frozen_params=False,
 			mixed_heads=False, 
 			combined_heads=False,
-			decay=False
+			decay=False,
+			parallel_heads=False,
+			use_projections=True
 		):
 		super().__init__()
-		self.double_tokens = double_tokens
 		self.n_vocab = n_vocab
-		if double_tokens:
-			self.wte = nn.Linear(n_vocab, dim)
-		else:
-			self.wte = nn.Embedding(n_vocab, dim)
+		self.wte = nn.Embedding(n_vocab, dim)
+		# encoder initialization
 		if frozen_encoder:
 			# enforce no grad on encoder
 			for _, param in frozen_encoder.named_parameters():
 				param.requires_grad = False
-			self.encoderblocks = frozen_encoder.model_blocks.to(device)
-
+			self.encoderblocks = frozen_encoder.model_blocks
 		else:
-			if frozen_toeplitz:
+			if frozen_params:
 				self.encoderblocks = nn.ModuleList(
 					[FrozenMixerBlock(
 					hidden_dim = dim,
@@ -52,10 +49,12 @@ class AutoencodingMixer(nn.Module):
 					heads = n_heads,
 					mixed_heads=mixed_heads, 
 					combined_heads=combined_heads,
-					decay=decay
+					decay=decay,
+					parallel_heads=parallel_heads,
+					use_projections=use_projections
 					)
 				for i in range(depth)]
-				).to(device)
+				)
 			else:
 				self.encoderblocks = nn.ModuleList(
 				[MixerBlock(
@@ -64,13 +63,15 @@ class AutoencodingMixer(nn.Module):
 					heads = n_heads,
 					mixed_heads=mixed_heads, 
 					combined_heads=combined_heads,
-					decay=decay
+					decay=decay,
+					parallel_heads=parallel_heads,
+					use_projections=use_projections
 					)
 				for i in range(depth)]
-				).to(device)
+				)
 	
-
-		if frozen_toeplitz:
+		# decoder initialization
+		if frozen_param:
 			self.decoderblocks = nn.ModuleList(
 					[FrozenMixerBlock(
 					hidden_dim = dim,
@@ -78,10 +79,12 @@ class AutoencodingMixer(nn.Module):
 					heads = n_heads,
 					mixed_heads=mixed_heads, 
 					combined_heads=combined_heads,
-					decay=decay
+					decay=decay,
+					parallel_heads=parallel_heads,
+					use_projections=use_projections
 					)
 				for i in range(depth)]
-				).to(device)
+				)
 		else:
 			self.decoderblocks = nn.ModuleList(
 				[MixerBlock(
@@ -90,10 +93,12 @@ class AutoencodingMixer(nn.Module):
 					heads = n_heads,
 					mixed_heads=mixed_heads, 
 					combined_heads=combined_heads,
-					decay=decay
+					decay=decay,
+					parallel_heads=parallel_heads,
+					use_projections=use_projections
 					)
 				for i in range(depth)]
-				).to(device)
+				)
 			
 		self.lm_head = nn.Linear(dim, n_vocab, bias=False)
 		self.cel = nn.CrossEntropyLoss()
@@ -114,13 +119,6 @@ class AutoencodingMixer(nn.Module):
 		else:
 			x = input_ids
 		x = x.to(device)
-		if self.double_tokens:
-			x_pairs = x.reshape(x.shape[0], x.shape[1]//2, 2)
-			# implements a two hot tensor
-			inputs = torch.nn.functional.one_hot(x_pairs[:, :, 0], self.n_vocab) + \
-					 torch.nn.functional.one_hot(x_pairs[:, :, 1], self.n_vocab)
-
-		x = self.wte(x)
 		for block in self.encoderblocks:
 			x = block(x)
 		
@@ -187,7 +185,21 @@ if __name__ == "__main__":
 	compression = 1
 	kernel = 1
 	heads = 4
-	model = AutoencodingMixer(vocab_size, dim, depth, length, n_heads=heads, kernel=kernel, compression=compression, frozen_toeplitz=False, mixed_heads=True, combined_heads=False, decay=False)
+	model = AutoencodingMixer(vocab_size, 
+		dim, 
+		depth, 
+		length, 
+		n_heads=heads, 
+		kernel=kernel, 
+		compression=compression, 
+		frozen_param=False, 
+		mixed_heads=True, 
+		combined_heads=False, 
+		decay=True,
+		parallel_heads=False,
+		use_projections=False
+
+	)
 	train_path = f"{data_root}/fineweb-edu-tokenized-train-c512"
 	test_path = f"{data_root}/fineweb-edu-tokenized-test-c512"
 
@@ -204,7 +216,7 @@ if __name__ == "__main__":
 		n_devices = torch.cuda.device_count()
 
 	# descriptive name for output
-	output_dir = f'{checkpoint_root}/fineweb_autoencoding_mixedrepeat_h4\
+	output_dir = f'{checkpoint_root}/fineweb_autoencoding_mixedrepeat_decay_noprojs_h{heads}_k{kernel}\
 _{dim}\
 _n{depth}\
 _c{length}_b{batch_size}x{n_devices}'
@@ -224,7 +236,7 @@ _c{length}_b{batch_size}x{n_devices}'
 		overwrite_output_dir=True,
 		save_safetensors=False,
 		max_steps=200000,
-                torch_compile=True	
+        torch_compile=True
 )
 
 	trainer = transformers.Trainer(
