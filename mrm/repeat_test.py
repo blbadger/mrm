@@ -574,7 +574,7 @@ class RepeatHeads(nn.Module):
                 ).to(device)
             else:
                 self.mixer_heads = nn.ModuleList(
-                    [RepeatCausalLinear(seq_len) for i in range(n_heads)]
+                    [ColRepeatCausalLinear(seq_len) for i in range(n_heads)]
                 ).to(device)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -780,13 +780,13 @@ if __name__ == "__main__":
     print("Vocab size: ", n_vocab)
 
     tokenized_length = 512
-    dim = 512
+    dim = 1024
     layers = 16
     n_heads = 4
     kernel= 1
 
     model = MLPMixer(
-        n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=False)
+        n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, mixed_heads=True, combined_heads=False, decay=True, parallel_heads=True, use_projections=True)
 
     #model = torch.compile(model)
 
@@ -795,7 +795,7 @@ if __name__ == "__main__":
     batch_size = total_batch_size // n_gpus
     train_path = f"{data_root}/fineweb-edu-tokenized-train-c512"
     test_path = f"{data_root}/fineweb-edu-tokenized-test-c512"
-    output_dir = f"{checkpoint_root}/fineweb_h{n_heads}_decay_nonparallel_mixed_noprojs_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
+    output_dir = f"{checkpoint_root}/fineweb_h{n_heads}_decay_parallel_mixed_noprojs_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
   
     datasets.config.IN_MEMORY_MAX_SIZE = 1e9
     train_dataset = load_from_disk(train_path, keep_in_memory=None)
@@ -838,4 +838,5 @@ if __name__ == "__main__":
     shutil.copy(code_path, output_dir) 
 
     model.train()
+    trainer.train(output_dir + '/checkpoint-112000')
     trainer.train()

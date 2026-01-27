@@ -125,6 +125,7 @@ if __name__ == '__main__':
 	dim = 512
 	layers = 16
 	n_heads = 4
+	kernel=1
 
 	# frozen encoder init and load
 	encoder = MLPMixer(
@@ -186,10 +187,11 @@ _c{tokenized_length}_b{batch_size}x{n_devices}'
 		overwrite_output_dir=True,
 		save_safetensors=True,
 		max_steps=200000,
+		torch_compile=True
 	)
 
 	trainer = transformers.Trainer(
-		model=model.to("cuda"),  # pre-assignment for FSDP initialization
+		model=model,
 		train_dataset=train_dataset,
 		eval_dataset=test_dataset,
 		args=training_arguments,

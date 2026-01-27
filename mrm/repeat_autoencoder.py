@@ -10,6 +10,7 @@ import os
 from dotenv import load_dotenv
 import shutil
 from repeat_test import MLPMixer, MixerBlock
+from repeat_test import *
 
 class AutoencodingMixer(nn.Module):
 
@@ -71,7 +72,7 @@ class AutoencodingMixer(nn.Module):
 				)
 	
 		# decoder initialization
-		if frozen_param:
+		if frozen_params:
 			self.decoderblocks = nn.ModuleList(
 					[FrozenMixerBlock(
 					hidden_dim = dim,
@@ -112,6 +113,17 @@ class AutoencodingMixer(nn.Module):
 		self.clm_encoder = clm_encoder
 		self.projection = nn.Linear(dim//2, dim)
 		self.random_input = random
+		self._init_weights()
+
+	def _init_weights(self): 
+		for m in self.modules(): 
+			if isinstance(m, nn.Linear) or isinstance(m, ColRepeatCausalLinear) or isinstance(m, RowRepeatCausalLinear) or isinstance(m, CombinedRepeatCausalLinear) \
+			or isinstance(m, DiagonalColCausalLinear) or isinstance(m, KernelRepeatLinear) or isinstance(m, HeadedRepeatCausalLinear): 
+				# Kaiming He initialization for Swish activation 
+				nn.init.kaiming_normal_(m.weight) 
+				if m.bias is not None: 
+					nn.init.zeros_(m.bias) 
+
 
 	def forward(self, input_ids, labels=None, **kwargs):
 		if self.random_input:
@@ -119,6 +131,7 @@ class AutoencodingMixer(nn.Module):
 		else:
 			x = input_ids
 		x = x.to(device)
+		x = self.wte(x)
 		for block in self.encoderblocks:
 			x = block(x)
 		
@@ -192,11 +205,11 @@ if __name__ == "__main__":
 		n_heads=heads, 
 		kernel=kernel, 
 		compression=compression, 
-		frozen_param=False, 
+		frozen_params=False, 
 		mixed_heads=True, 
 		combined_heads=False, 
 		decay=True,
-		parallel_heads=False,
+		parallel_heads=True,
 		use_projections=False
 
 	)
@@ -216,7 +229,7 @@ if __name__ == "__main__":
 		n_devices = torch.cuda.device_count()
 
 	# descriptive name for output
-	output_dir = f'{checkpoint_root}/fineweb_autoencoding_mixedrepeat_decay_noprojs_h{heads}_k{kernel}\
+	output_dir = f'{checkpoint_root}/fineweb_autoencoding_mixedrepeat_decay_paraprojs_h{heads}_k{kernel}\
 _{dim}\
 _n{depth}\
 _c{length}_b{batch_size}x{n_devices}'
@@ -236,11 +249,11 @@ _c{length}_b{batch_size}x{n_devices}'
 		overwrite_output_dir=True,
 		save_safetensors=False,
 		max_steps=200000,
-        torch_compile=True
+                torch_compile=True
 )
 
 	trainer = transformers.Trainer(
-		model=model.to("cuda"),  # pre-assignment for FSDP initialization
+		model=model,
 		train_dataset=train_dataset,
 		eval_dataset=test_dataset,
 		args=training_arguments,
