@@ -786,7 +786,7 @@ if __name__ == "__main__":
     kernel= 1
 
     model = MLPMixer(
-        n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, mixed_heads=True, combined_heads=False, decay=True, parallel_heads=True, use_projections=True)
+        n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, mixed_heads=True, combined_heads=False, decay=True, parallel_heads=True, use_projections=False)
 
     #model = torch.compile(model)
 
@@ -838,5 +838,4 @@ if __name__ == "__main__":
     shutil.copy(code_path, output_dir) 
 
     model.train()
-    trainer.train(output_dir + '/checkpoint-112000')
     trainer.train()

@@ -209,8 +209,8 @@ if __name__ == "__main__":
 		mixed_heads=True, 
 		combined_heads=False, 
 		decay=True,
-		parallel_heads=True,
-		use_projections=False
+		parallel_heads=False,
+		use_projections=True
 
 	)
 	train_path = f"{data_root}/fineweb-edu-tokenized-train-c512"
@@ -229,7 +229,7 @@ if __name__ == "__main__":
 		n_devices = torch.cuda.device_count()
 
 	# descriptive name for output
-	output_dir = f'{checkpoint_root}/fineweb_autoencoding_mixedrepeat_decay_paraprojs_h{heads}_k{kernel}\
+	output_dir = f'{checkpoint_root}/fineweb_autoencoding_mixedrepeat_decay_nonparallel_projs_h{heads}_k{kernel}\
 _{dim}\
 _n{depth}\
 _c{length}_b{batch_size}x{n_devices}'

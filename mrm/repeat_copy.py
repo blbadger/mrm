@@ -250,18 +250,18 @@ if __name__ == "__main__":
     print("Vocab size: ", n_vocab)
 
     tokenized_length = 1024
-    dim = 512
+    dim = 1024
     layers = 16
     n_heads = 4
     kernel = 1
 
     model = CopyMixer(n_vocab, dim,  tokenized_length, layers, kernel=kernel, heads=n_heads, copy=True, 
-        mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=False)
+        mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True)
 
     train_path = f"{data_root}/fineweb-edu-tokenized-train-c1024"
     test_path = f"{data_root}/fineweb-edu-tokenized-test-c1024"
     
-    output_dir = f"{checkpoint_root}/fineweb_copy_repeat_mixed_noparallel_noprojs_decay_h4_{dim}_n{layers}_b16x4"
+    output_dir = f"{checkpoint_root}/fineweb_copy_repeat_mixed_noparallel_projs_decay_h4_{dim}_n{layers}_b16x4"
     datasets.config.IN_MEMORY_MAX_SIZE = 5e9
     train_dataset = load_from_disk(train_path, keep_in_memory=None)
     test_dataset = load_from_disk(test_path, keep_in_memory=None).filter(lambda x: x['input_ids'][-1] != 1).take(5000)
@@ -286,12 +286,12 @@ if __name__ == "__main__":
         overwrite_output_dir=True,
         save_safetensors=True,
         max_steps=10000,
-        #torch_compile=True,
+        torch_compile=True,
         # max_grad_norm=200.0
     )
 
     trainer = transformers.Trainer(
-        model=model.to("cuda"),  # pre-assignment for FSDP initialization
+        model=model,
         train_dataset=train_dataset,
         eval_dataset=test_dataset,
         args=training_arguments,
@@ -303,7 +303,8 @@ if __name__ == "__main__":
     code_path = os.path.abspath(__file__) 
     if not os.path.isdir(output_dir): 
         os.mkdir(output_dir) 
-    shutil.copy(code_path, output_dir) 
+    shutil.copy(code_path, output_dir)
+    torch._dynamo.config.cache_size_limit = 100 
 
     model.train()
     trainer.train()
