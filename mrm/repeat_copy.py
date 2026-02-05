@@ -256,12 +256,12 @@ if __name__ == "__main__":
     kernel = 1
 
     model = CopyMixer(n_vocab, dim,  tokenized_length, layers, kernel=kernel, heads=n_heads, copy=True, 
-        mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True)
+        mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=False)
 
     train_path = f"{data_root}/fineweb-edu-tokenized-train-c1024"
     test_path = f"{data_root}/fineweb-edu-tokenized-test-c1024"
     
-    output_dir = f"{checkpoint_root}/fineweb_copy_repeat_mixed_noparallel_projs_decay_h4_{dim}_n{layers}_b16x4"
+    output_dir = f"{checkpoint_root}/fineweb_copy_repeat_mixed_noparallel_noprojs_decay_h4_{dim}_n{layers}_b16x4"
     datasets.config.IN_MEMORY_MAX_SIZE = 5e9
     train_dataset = load_from_disk(train_path, keep_in_memory=None)
     test_dataset = load_from_disk(test_path, keep_in_memory=None).filter(lambda x: x['input_ids'][-1] != 1).take(5000)

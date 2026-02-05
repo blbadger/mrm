@@ -192,7 +192,7 @@ if __name__ == "__main__":
 	print("Vocab size: ", n_vocab)
 
 	vocab_size = 8000
-	dim = 512
+	dim = 1024
 	depth = 16
 	length = 512
 	compression = 1
@@ -210,7 +210,7 @@ if __name__ == "__main__":
 		combined_heads=False, 
 		decay=True,
 		parallel_heads=False,
-		use_projections=True
+		use_projections=False
 
 	)
 	train_path = f"{data_root}/fineweb-edu-tokenized-train-c512"
@@ -222,14 +222,14 @@ if __name__ == "__main__":
 	print(len(train_dataset), len(test_dataset))
 	mlflow.end_run()
 
-	batch_size = 32
+	batch_size = 16
 	n_devices = 4
 	# get number of devices (assumes that all visible devices are used for training)
 	if torch.cuda.is_available():
 		n_devices = torch.cuda.device_count()
 
 	# descriptive name for output
-	output_dir = f'{checkpoint_root}/fineweb_autoencoding_mixedrepeat_decay_nonparallel_projs_h{heads}_k{kernel}\
+	output_dir = f'{checkpoint_root}/fineweb_autoencoding_mixedrepeat_decay_nonparallel_noprojs_h{heads}_k{kernel}\
 _{dim}\
 _n{depth}\
 _c{length}_b{batch_size}x{n_devices}'
@@ -238,6 +238,7 @@ _c{length}_b{batch_size}x{n_devices}'
 		num_train_epochs=2,
 		per_device_train_batch_size=batch_size,
 		per_device_eval_batch_size=batch_size,
+		gradient_accumulation_steps=2,
 		warmup_steps=500,
 		eval_steps=4000,
 		save_steps=8000,

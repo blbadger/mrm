@@ -1,28 +1,18 @@
 import torch
-import numpy as np
-import time
-
-
-import torch
 import torch.nn as nn
 from einops import rearrange
 import transformers
 from transformers import AutoTokenizer
 import datasets
 from datasets import load_from_disk
-from safetensors.torch import load_model
 import mlflow
 import os
 from dotenv import load_dotenv
 import shutil
 # define a MLP Mixer based causal-language-model using weight masking
 
+class RepeatCausalLinear(nn.Module):
 
-class ToeplitzCausalLinear(nn.Module):
-    """
-    A linear layer with a triangular (causal) mask applied to the weight matrix.
-    This ensures each position i cannot use info from positions > i.
-    """
     def __init__(self, dim: int):
 
         super().__init__()
@@ -33,15 +23,10 @@ class ToeplitzCausalLinear(nn.Module):
 
     def vector_to_matrix(self, v: torch.Tensor) -> torch.Tensor:
         """
-        Given a vector v of shape (m,), returns an (m x m) matrix M
-        where M[i, j] = v[j - i] if j >= i, and 0 otherwise.
-
-        For example, if v = [a, b, c, d] then M will be:
-
-        [ a  b  c  d ]
-        [ 0  a  b  c ]
-        [ 0  0  a  b ]
-        [ 0  0  0  a ]
+        [ a  a  a  a ]
+        [ 0  b  b  b ]
+        [ 0  0  c  c ]
+        [ 0  0  0  d ]
         """
         v = v.reshape(-1)  # Ensure v is a 1D tensor
         m = v.shape[0]
@@ -51,114 +36,73 @@ class ToeplitzCausalLinear(nn.Module):
             torch.arange(m, device=v.device),
             indexing="ij",
         )
-        # j - i gives the offset into v. When j < i, we want a 0.
         M = torch.where(
-            j >= i, v[j - i], torch.zeros(m, m, device=v.device, dtype=v.dtype)
+            j >= i, v[i], torch.zeros(m, m, device=v.device, dtype=v.dtype)
         )
         return M
-
-    def constant_transformation(self):
-        # t: n, d
-        t = self.weight.T
-        t_pad = -torch.sum(t, dim=0, keepdim=True)
-        t = torch.cat([t, t_pad], dim=0)
-        m, d = t.shape
-        # solve the eq
-        t_ifft = torch.fft.ifft(t, n=m, dim=-2, norm="ortho")
-        b = torch.cat([torch.zeros(1, d).to(t.device), t_ifft[1:m] / np.sqrt(m)], dim=0)
-        theta = -2j * torch.pi * torch.arange(1, m).reshape(1, -1, 1) / m
-        theta = theta.to(t.device)
-        return theta, b
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         x shape: (batch, embed_dim, seq_len)
         """
         B, E, S = x.shape
-        W = self.vector_to_matrix(self.weight).to(x.dtype)
+        W = self.vector_to_matrix(self.weight)
         x_reshaped = x.reshape(B * E, S)  # (B*E, S)
         out = x_reshaped @ W  # (B*E, S)
-        out = out + self.bias.to(x.dtype)  # broadcast bias
-        out = out.view(B, E, S)  # reshape back
-        return out
-
-    def forward(self, x, dim=-2, normalize=False):
-        theta, b = self.constant_transformation() # t is [n (h d)]
-        # 1, e, d (e = n, d=1)
-        self.lambda_ = torch.exp(theta).to(self.weight.device)
-        # e, d
-        self.b = b[1:].to(x.device)
-        output = []
-        x = rearrange(x, 'b d n -> b n d')
-        b, n, d = x.shape
-        zero = torch.zeros(b, 1, d).to(x.device)
-        u = zero
-        self.b = self.b.unsqueeze(0).repeat(x.shape[0], 1, x.shape[2])
-        for i in range(n):
-            lambda_value = self.lambda_[:, i, :].unsqueeze(1).repeat(b, 1, d)
-            u = lambda_value * u
-            b_term = self.b[:, i, :] * x[:, i, :]
-            u += b_term.unsqueeze(1)
-            # b, h, d -> b, 1, d
-            y = torch.sum(u, dim=1, keepdim=True) # h=1, so not really necessary
-            output.append(y)
-
-        output = torch.cat(output, dim=1) # b n d
-        output = rearrange(output, 'b n d -> b d n').real
-        return output
-
-
-class FFTToeplitzCausalLinear(nn.Module):
-    """
-    A Toeplitz layer (masked) implemented using FFTs for O(dn log n) time and (O(dn)) space
-    complexity.
-    """
-    def __init__(self, dim: int):
-
-        super().__init__()
-        # Standard weight + bias
-        self.weight = nn.Parameter(torch.randn(1, dim)) # toeplitz op weight
-        self.bias = nn.Parameter(torch.zeros(dim))
-
-    def get_rowcol(self, x):
-        toep_col = torch.cat((torch.tensor([self.weight[0, 0]]), torch.zeros(dim-1)))
-        c, r = self.weight.to(x.device).squeeze(0), toep_col.to(x.device) #first row and col of transposed T
-        return c, r
-
-    def torch_matmul_toeplitz(self, x):
-        """
-        FFT-based Toeplitz matmul: computes TX, where c is the first col of T and r the first row of T.
-        Note that this is implmemented for real-valued X and T only.
-        Based on the official Scipy matmul_toeplitz implementation 
-        (https://github.com/scipy/scipy/blob/v1.16.2/scipy/linalg/_basic.py)
-
-        Args:
-            c: torch.tensor, vector of first column of Toeplitz matrix
-            r: torch.tensor, vector of first row of Toeplitz matrix
-            x: torch.tensor, matrix of input values to right multiply
-        """
-        input_dtype = x.dtype
-        c, r = self.get_rowcol(x)
-        m, n = x.shape
-        T_nrows, T_ncols = r.shape[0], c.shape[0] # Toeplitz matrix rows and cols
-        p = T_nrows + T_ncols - 1 # length of the Toeplitz vector
-        return_shape = (T_nrows, n)
-        embedded_column = torch.cat((c, torch.flip(r[1:], dims=[0]))) # circulant embedding
-        fft_mat = torch.fft.rfft(embedded_column).reshape(-1, 1)
-        fft_x = torch.fft.rfft(x, n=p, dim=0)
-        output = torch.fft.irfft(fft_mat*fft_x, n=p, dim=0)[:T_nrows, :] # remove pad from inverse FFT
-        formatted_out = output.to(input_dtype) # output to be transposed later
-        return formatted_out
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        B, E, S = x.shape
-        x_reshaped = x.reshape(B * E, S)
-        out = self.torch_matmul_toeplitz(x_reshaped.T).T
         out = out + self.bias  # broadcast bias
         out = out.view(B, E, S)  # reshape back
         return out
 
-class ToeplitzHeads(nn.Module):
+
+class KernelRepeatLinear(nn.Module):
+    """
+    A linear layer with a triangular (causal) mask applied to the weight matrix.
+    This ensures each position i cannot use info from positions > i.
+    """
+
+    def __init__(self, dim: int, kernel: int):
+
+        super().__init__()
+
+        # Standard weight + bias
+        self.weight = nn.Parameter(torch.randn(kernel, dim))
+        self.bias = nn.Parameter(torch.zeros(dim))
+        self.kernel = kernel
+
+    def vector_to_matrix(self, v: torch.Tensor) -> torch.Tensor:
+
+
+	# Expects v is a preformed tensor with shape [k, D]
+        m = v.shape[-1] # vector shape
+
+        # Create index grids for rows and columns
+        i, j = torch.meshgrid(
+            torch.arange(m, device=v.device),
+            torch.arange(m, device=v.device),
+            indexing="ij",
+        )
+        # j - i gives the offset into v. When j < i, we want a 0.
+        M = torch.where(
+            j >= i, v[..., i], torch.zeros(m, m, device=v.device, dtype=v.dtype)
+        )
+        return M
+
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.to(device)
+        p = self.kernel-1 # pad value
+        B, E, S = x.shape
+        W = self.vector_to_matrix(self.weight)
+        # apply pad for k>1 convolution
+        padded_x = torch.nn.functional.pad(input=x, pad=(0, 0, p, p), mode='constant', value=0)
+        padded_e = padded_x.shape[1]
+        processed_x = torch.stack([padded_x[:, i:E + i] for i in range(self.kernel)], dim=1)
+        out = processed_x @ W
+        accumulated_output = torch.sum(out, dim=1) + self.bias
+        return accumulated_output
+
+
+class RepeatHeads(nn.Module):
 
     def __init__(
         self,
@@ -167,51 +111,32 @@ class ToeplitzHeads(nn.Module):
         hidden_dim: int,
         n_heads: int,
         expanded_convs: bool = False,
-        dropout: float = 0.,
-        use_FFT = False
+        dropout: float = 0.1,
     ):
         super().__init__()
         self.n_heads = n_heads
         self.proj_head = nn.ModuleList(
             [nn.Linear(dim, hidden_dim) for i in range(n_heads)]
-        )
+        ).to(device)
 
         self.out_proj = nn.Linear(dim, dim)
 
         if expanded_convs:
-            if use_FFT:
-                self.mixer_heads = nn.ModuleList(
-                    [
-                        nn.Sequential(
-                            FFTToeplitzCausalLinear(seq_len),
-                            nn.SiLU(),
-                            nn.Dropout(dropout),
-                            FFTToeplitzCausalLinear(seq_len),
-                        )
-                        for i in range(n_heads)]
-                )
-
-            else:
-                self.mixer_heads = nn.ModuleList(
-                    [
-                        nn.Sequential(
-                            ToeplitzCausalLinear(seq_len),
-                            nn.SiLU(),
-                            nn.Dropout(dropout),
-                            ToeplitzCausalLinear(seq_len),
-                        )
-                        for i in range(n_heads)]
-                )
-
+            self.mixer_heads = nn.ModuleList(
+                [
+                    nn.Sequential(
+                        RepeatCausalLinear(seq_len),
+                        nn.SiLU(),
+                        nn.Dropout(dropout),
+                        RepeatCausalLinear(seq_len),
+                    )
+                    for i in range(n_heads)
+                ]
+            )
         else:
-            if use_FFT:
-                self.mixer_heads = nn.ModuleList(
-                    [FFTToeplitzCausalLinear(seq_len) for i in range(n_heads)]
-                )
-            else:
-                self.mixer_heads = nn.ModuleList(
-                    [ToeplitzCausalLinear(seq_len) for i in range(n_heads)]
-                )
+            self.mixer_heads = nn.ModuleList(
+                [RepeatCausalLinear(seq_len) for i in range(n_heads)]
+            )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         activations = []
@@ -240,8 +165,8 @@ class MixerBlock(nn.Module):
         expansion_factor: int = 4,
         dropout: float = 0.,
         heads=None,
-        expanded_convs=False,
-        use_FFT=False,
+        kernel=1,
+	expanded_convs=False,
     ):
 
         super(MixerBlock, self).__init__()
@@ -263,39 +188,29 @@ class MixerBlock(nn.Module):
 
         # token-norm
         self.token_norm = nn.LayerNorm(hidden_dim)
-        if heads and heads > 0:
-            self.token_mixing_layer = ToeplitzHeads(
+        if heads is not None and heads > 0:
+            self.token_mixing_layer = RepeatHeads(
                 hidden_dim,
                 seq_len,
                 hidden_dim // heads,
                 heads,
                 expanded_convs=expanded_convs,
-                use_FFT=use_FFT
-            ) 
+            )  # type: ignore[assignment]
 
         else:
             if expanded_convs:
-                if use_FFT:
-                    # token-mixing layer
-                    self.token_mixing_layer = nn.Sequential(
-                        FFTToeplitzCausalLinear(seq_len),
-                        nn.SiLU(),
-                        nn.Dropout(dropout),
-                        FFTToeplitzCausalLinear(seq_len),
-                    ) 
                 # token-mixing layer
                 self.token_mixing_layer = nn.Sequential(
-                    ToeplitzCausalLinear(seq_len),
+                    RepeatCausalLinear(seq_len),
                     nn.SiLU(),
                     nn.Dropout(dropout),
-                    ToeplitzCausalLinear(seq_len),
-                ) 
+                    RepeatCausalLinear(seq_len),
+                )  # type: ignore[assignment]
+            elif kernel is not None and kernel > 1:
+                self.token_mixing_layer = KernelRepeatLinear(seq_len, kernel=kernel)
             else:
                 # flat mixer layer
-                if use_FFT:
-                    self.token_mixing_layer = FFTToeplitzCausalLinear(seq_len)
-                else:
-                    self.token_mixing_layer = ToeplitzCausalLinear(seq_len)
+                self.token_mixing_layer = RepeatCausalLinear(seq_len)  # type: ignore[assignment]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         res = x
@@ -321,10 +236,10 @@ class MLPMixer(nn.Module):
         seq_len: int,
         num_blocks: int,
         heads=None,
-        expanded_convs=False,
+        kernel=1,
+	expanded_convs=False,
         copy=False,
         tie_io=False,
-        use_FFT=False
     ):
 
         super(MLPMixer, self).__init__()
@@ -341,7 +256,7 @@ class MLPMixer(nn.Module):
         self.mixer_blocks = nn.ModuleList(
             [
                 MixerBlock(
-                    hidden_dim, seq_len, heads=heads, expanded_convs=expanded_convs, use_FFT=use_FFT
+                    hidden_dim, seq_len, heads=heads, expanded_convs=expanded_convs, kernel=kernel
                 )
                 for _ in range(num_blocks)
             ]
@@ -364,7 +279,7 @@ class MLPMixer(nn.Module):
     def _init_weights(self):
 
         for m in self.modules():
-            if isinstance(m, nn.Linear) or isinstance(m, ToeplitzCausalLinear) or isinstance(m, FFTToeplitzCausalLinear):
+            if isinstance(m, nn.Linear) or isinstance(m, RepeatCausalLinear):
                 # Kaiming He initialization for Swish activation
                 nn.init.kaiming_normal_(m.weight)
                 if m.bias is not None:
@@ -417,30 +332,32 @@ if __name__ == "__main__":
     tokenized_length = 512
     dim = 512
     layers = 16
-    n_heads = 4
+    n_heads = None
+    kernel= 1
 
     model = MLPMixer(
-        n_vocab, dim, tokenized_length, layers, heads=n_heads, expanded_convs=False, copy=False, use_FFT=False
-    )
-    load_model(model, f"{checkpoint_root}/toeplitz_training/fineweb_flat_h4_toep_512_n16_c512_b32x4/checkpoint-200000/model.safetensors")
+        n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False
+    ).float()
 
+    n_gpus = torch.cuda.device_count()
+    total_batch_size = 128
+    batch_size = total_batch_size // n_gpus
     train_path = f"{data_root}/fineweb-edu-tokenized-train-c512"
     test_path = f"{data_root}/fineweb-edu-tokenized-test-c512"
-
-    output_dir = f"{checkpoint_root}/fineweb_toeplitz_etsc"
+    output_dir = f"{checkpoint_root}/fineweb_h{n_heads}_repeat_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
     
-    datasets.config.IN_MEMORY_MAX_SIZE = 5e9
+    datasets.config.IN_MEMORY_MAX_SIZE = 50e9
     train_dataset = load_from_disk(train_path, keep_in_memory=None)
-    test_dataset = load_from_disk(test_path, keep_in_memory=None).take(1000)
+    test_dataset = load_from_disk(test_path, keep_in_memory=None) #.filter(lambda x: x['input_ids'][-1] != 1).take(5000)
     print(len(train_dataset), len(test_dataset))
     mlflow.end_run()
     print("training begun")
     print(model)
     training_arguments = transformers.TrainingArguments(
         num_train_epochs=2,
-        per_device_train_batch_size=32,
-        per_device_eval_batch_size=32,
-        warmup_steps=500,
+        per_device_train_batch_size=batch_size,
+        per_device_eval_batch_size=batch_size,
+        warmup_steps=50,
         eval_steps=4000,
         save_steps=8000,
         learning_rate=5e-4,
@@ -451,7 +368,7 @@ if __name__ == "__main__":
         overwrite_output_dir=True,
         save_safetensors=True,
         max_steps=200000,
-        #torch_compile=True
+        torch_compile=True
     )
 
     trainer = transformers.Trainer(
@@ -468,10 +385,5 @@ if __name__ == "__main__":
         os.mkdir(output_dir) 
     shutil.copy(code_path, output_dir) 
 
-    print (trainer.evaluate())
-    # model.train()
-    # trainer.train()
-
-
-
-
+    model.train()
+    trainer.train(output_dir + '/checkpoint-104000')
