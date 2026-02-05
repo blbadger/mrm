@@ -110,7 +110,7 @@ class ToeplitzCausalLinear(nn.Module):
     def forward(self, x):
         theta, b = self.constant_transformation() # t is [n (h d)]
         # 1, e, d (e = n, d=1)
-        self.lambda_ = torch.exp(theta).to(self.weight.device) * torch.ones(x.shape[-1], x.shape[1])
+        self.lambda_ = torch.exp(theta).to(self.weight.device) * torch.ones(x.shape[-1], x.shape[1]).to(self.weight.device)
         # e, d
         self.b = b[1:].to(x.device)
         output = []
@@ -120,9 +120,9 @@ class ToeplitzCausalLinear(nn.Module):
         u = zero
         self.b = self.b.unsqueeze(0).repeat(x.shape[0], 1, x.shape[2])
         for i in range(n):
-            u = lambda_value * u
-            b_term = self.b * u
-            u += b_term.unsqueeze(1)
+            u = self.lambda_ * u
+            b_term = self.b * x[:, i, :].unsqueeze(1)
+            u += b_term
             # b, h, d -> b, 1, d
             y = torch.sum(u, dim=1, keepdim=True)
             output.append(y)
