@@ -70,22 +70,47 @@ class ToeplitzCausalLinear(nn.Module):
         theta = theta.to(t.device)
         return theta, b
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        x shape: (batch, embed_dim, seq_len)
-        """
-        B, E, S = x.shape
-        W = self.vector_to_matrix(self.weight).to(x.dtype)
-        x_reshaped = x.reshape(B * E, S)  # (B*E, S)
-        out = x_reshaped @ W  # (B*E, S)
-        out = out + self.bias.to(x.dtype)  # broadcast bias
-        out = out.view(B, E, S)  # reshape back
-        return out
+    # def forward(self, x: torch.Tensor) -> torch.Tensor:
+    #     """
+    #     x shape: (batch, embed_dim, seq_len)
+    #     """
+    #     B, E, S = x.shape
+    #     W = self.vector_to_matrix(self.weight).to(x.dtype)
+    #     x_reshaped = x.reshape(B * E, S)  # (B*E, S)
+    #     out = x_reshaped @ W  # (B*E, S)
+    #     out = out + self.bias.to(x.dtype)  # broadcast bias
+    #     out = out.view(B, E, S)  # reshape back
+    #     return out
 
-    def forward(self, x, dim=-2, normalize=False):
+    # def forward(self, x):
+    #     theta, b = self.constant_transformation() # t is [n (h d)]
+    #     # 1, e, d (e = n, d=1)
+    #     self.lambda_ = torch.exp(theta).to(self.weight.device)
+    #     # e, d
+    #     self.b = b[1:].to(x.device)
+    #     output = []
+    #     x = rearrange(x, 'b d n -> b n d')
+    #     b, n, d = x.shape
+    #     zero = torch.zeros(b, 1, d).to(x.device)
+    #     u = zero
+    #     self.b = self.b.unsqueeze(0).repeat(x.shape[0], 1, x.shape[2])
+    #     for i in range(n):
+    #         lambda_value = self.lambda_[:, i, :].unsqueeze(1).repeat(b, 1, d)
+    #         u = lambda_value * u
+    #         b_term = self.b[:, i, :] * x[:, i, :]
+    #         u += b_term.unsqueeze(1)
+    #         # b, h, d -> b, 1, d
+    #         y = torch.sum(u, dim=1, keepdim=True) # h=1, so not really necessary
+    #         output.append(y)
+
+    #     output = torch.cat(output, dim=1) # b n d
+    #     output = rearrange(output, 'b n d -> b d n').real
+    #     return output
+
+    def forward(self, x):
         theta, b = self.constant_transformation() # t is [n (h d)]
         # 1, e, d (e = n, d=1)
-        self.lambda_ = torch.exp(theta).to(self.weight.device)
+        self.lambda_ = torch.exp(theta).to(self.weight.device) * torch.ones(x.shape[-1], x.shape[1])
         # e, d
         self.b = b[1:].to(x.device)
         output = []
@@ -95,17 +120,17 @@ class ToeplitzCausalLinear(nn.Module):
         u = zero
         self.b = self.b.unsqueeze(0).repeat(x.shape[0], 1, x.shape[2])
         for i in range(n):
-            lambda_value = self.lambda_[:, i, :].unsqueeze(1).repeat(b, 1, d)
             u = lambda_value * u
-            b_term = self.b[:, i, :] * x[:, i, :]
+            b_term = self.b * u
             u += b_term.unsqueeze(1)
             # b, h, d -> b, 1, d
-            y = torch.sum(u, dim=1, keepdim=True) # h=1, so not really necessary
+            y = torch.sum(u, dim=1, keepdim=True)
             output.append(y)
 
         output = torch.cat(output, dim=1) # b n d
         output = rearrange(output, 'b n d -> b d n').real
         return output
+
 
 
 class FFTToeplitzCausalLinear(nn.Module):
