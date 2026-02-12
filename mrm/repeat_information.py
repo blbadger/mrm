@@ -11,7 +11,7 @@ from datasets import load_dataset, load_from_disk
 from dotenv import load_dotenv
 import shutil
 import safetensors
-from repeat_test import MLPMixer, MixerBlock
+from repeat_main import MLPMixer, MixerBlock
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 

@@ -9,8 +9,8 @@ import mlflow
 import os
 from dotenv import load_dotenv
 import shutil
-from repeat_test import MLPMixer, MixerBlock
-from repeat_test import *
+from repeat_main import MLPMixer, MixerBlock
+from repeat_main import *
 
 class AutoencodingMixer(nn.Module):
 
