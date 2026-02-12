@@ -11,7 +11,7 @@ from safetensors.torch import load_model
 import os
 from dotenv import load_dotenv
 import shutil
-from repeat_test import RepeatCausalLinear, DiagonalCausalLinear, KernelRepeatLinear, RepeatHeads, MixerBlock
+from compat_repeat_test import RepeatCausalLinear, RepeatHeads, MixerBlock
 
 class MLPMixer(nn.Module, GenerationMixin):
 
@@ -53,7 +53,7 @@ class MLPMixer(nn.Module, GenerationMixin):
 				 'hidden_size':hidden_dim,
 				 'intermediate_size': 4*hidden_dim,
 				 'num_hidden_layers': layers,
-				 'num_attention_heads': n_heads,
+				 'num_attention_heads': 4,
 				 'vocab_size': vocab_size
 			 }
 		self.config = LlamaConfig(**config)
@@ -66,7 +66,7 @@ class MLPMixer(nn.Module, GenerationMixin):
 
 	def _init_weights(self):
 		for m in self.modules():
-			if isinstance(m, nn.Linear) or isinstance(m, RepeatCausalLinear) or isinstance(m, DiagonalCausalLinear) or isinstance(m, KernelRepeatLinear):
+			if isinstance(m, nn.Linear) or isinstance(m, RepeatCausalLinear): 
 				# Kaiming He initialization for Swish activation
 				nn.init.kaiming_normal_(m.weight)
 				if m.bias is not None:
@@ -99,7 +99,6 @@ class MLPMixer(nn.Module, GenerationMixin):
 		logits = self.output_layer(x)
 		logits = logits[:, :-1].contiguous()
 
-
 		truncated_logits = []
 		for i in range(logits.shape[0]):
 			truncated_logits.append(logits[i, :input_lengths[i]])
@@ -112,7 +111,6 @@ class MLPMixer(nn.Module, GenerationMixin):
 			loss = self.loss_fn(logits, labels)
 			print (loss)
 			return CausalLMOutput(loss=loss, logits=truncated_logits)
-
 		else:
 			return CausalLMOutput(loss=0, logits=truncated_logits)
 
@@ -130,16 +128,17 @@ if __name__ == "__main__":
     tokenized_length = 512
     dim = 1024
     layers = 16
-    n_heads = 4
+    n_heads = None
     kernel = 1
 
     model = MLPMixer(
         n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False
     ).float().to(device)
 
-    generation_config = GenerationConfig(do_sample=True, temperature=0.7, top_p=0.95)
+    generation_config = GenerationConfig(greedy=True)
 
-    load_model(model, data_root + '/fineweb_h4_colrepeat_k1_1024_n16_c512.safetensors')
+    print (model)
+    load_model(model, f"{checkpoint_root}/fineweb_hNone_colrepeat_k1_1024_n16_c512_b32x4/checkpoint-200000/model.safetensors")
     text = '''The color of the clear sky during daytime is usually'''
     input_ids = torch.tensor(tokenizer.encode(text)[1:]).unsqueeze(0).to(device) # ignore bos token
     print (input_ids)
