@@ -31,7 +31,7 @@ class InferenceMLPMixer(MLPMixer, GenerationMixin):
         parallel_heads=False,
         use_projections=True
 	):
-		super().__init__(vocab_size, hidden_dim, seq_length, num_blocks, heads=heads, kernel=kernel, expanded_convs=expanded_convs, copy=copy, 
+		super().__init__(vocab_size, hidden_dim, seq_len, num_blocks, heads=heads, kernel=kernel, expanded_convs=expanded_convs, copy=copy, 
 			mixed_heads=mixed_heads, combined_heads=combined_heads, decay=decay, parallel_heads=parallel_heads, use_projections=use_projections)
 
 		self._init_weights()
@@ -50,14 +50,6 @@ class InferenceMLPMixer(MLPMixer, GenerationMixin):
 
 	def can_generate(self):
 		return True
-
-	def _init_weights(self):
-		for m in self.modules():
-			if isinstance(m, nn.Linear) or isinstance(m, RepeatCausalLinear): 
-				# Kaiming He initialization for Swish activation
-				nn.init.kaiming_normal_(m.weight)
-				if m.bias is not None:
-					nn.init.zeros_(m.bias)
 
 	def count_params(self):
 		return sum(p.numel() for p in self.parameters() if p.requires_grad)
@@ -112,7 +104,7 @@ if __name__ == "__main__":
     n_vocab = tokenizer.vocab_size
     print("Vocab size: ", n_vocab)
 
-    tokenized_length = 512
+    tokenized_length = 1024
     dim = 1024
     layers = 16
     n_heads = 4
@@ -122,10 +114,10 @@ if __name__ == "__main__":
         n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
         mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True).float().to(device)
 
-    generation_config = GenerationConfig(greedy=True)
+    generation_config = GenerationConfig(do_sample=True, top_p=0.9)
     print (model)
     load_model(model, f"{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors")
-    text = '''The color of the clear sky during daytime is usually'''
+    text = '''Taylor Swift was born in the year'''
     input_ids = torch.tensor(tokenizer.encode(text)[1:]).unsqueeze(0).to(device) # ignore bos token
     print (input_ids)
     output_ids = model.generate(input_ids, max_length=len(input_ids[0]) + 50, generation_config=generation_config)
