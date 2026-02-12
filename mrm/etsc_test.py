@@ -109,7 +109,7 @@ class ToeplitzCausalLinear(nn.Module):
 
     def forward(self, x):
         theta, b = self.constant_transformation() # t is [n (h d)]
-        # 1, e, d (e = n, d=1)
+        # 1, e, d (e = n?? d=1)
         self.lambda_ = torch.exp(theta).to(self.weight.device) * torch.ones(x.shape[-1], x.shape[1]).to(self.weight.device)
         # e, d
         self.b = b[1:].to(x.device)
@@ -120,7 +120,7 @@ class ToeplitzCausalLinear(nn.Module):
         u = zero
         self.b = self.b.unsqueeze(0).repeat(x.shape[0], 1, x.shape[2])
         for i in range(n):
-            u = self.lambda_ * u
+            u = self.lambda_ * u; print (u.shape)
             b_term = self.b * x[:, i, :].unsqueeze(1)
             u += b_term
             # b, h, d -> b, 1, d
@@ -439,24 +439,24 @@ if __name__ == "__main__":
     n_vocab = len(tokenizer)
     print("Vocab size: ", n_vocab)
 
-    tokenized_length = 512
-    dim = 512
+    tokenized_length = 1024
+    dim = 1024
     layers = 16
-    n_heads = 4
+    n_heads = None
 
     model = MLPMixer(
         n_vocab, dim, tokenized_length, layers, heads=n_heads, expanded_convs=False, copy=False, use_FFT=False
     )
-    load_model(model, f"{checkpoint_root}/toeplitz_training/fineweb_flat_h4_toep_512_n16_c512_b32x4/checkpoint-200000/model.safetensors")
+    load_model(model, f"{checkpoint_root}/toeplitz_training/fineweb_flat_toep_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors")
 
-    train_path = f"{data_root}/fineweb-edu-tokenized-train-c512"
-    test_path = f"{data_root}/fineweb-edu-tokenized-test-c512"
+    train_path = f"{data_root}/fineweb-edu-tokenized-train-c1024"
+    test_path = f"{data_root}/fineweb-edu-tokenized-test-c1024"
 
     output_dir = f"{checkpoint_root}/fineweb_toeplitz_etsc"
     
     datasets.config.IN_MEMORY_MAX_SIZE = 5e9
     train_dataset = load_from_disk(train_path, keep_in_memory=None)
-    test_dataset = load_from_disk(test_path, keep_in_memory=None).take(1000)
+    test_dataset = load_from_disk(test_path, keep_in_memory=None).take(5000)
     print(len(train_dataset), len(test_dataset))
     mlflow.end_run()
     print("training begun")
