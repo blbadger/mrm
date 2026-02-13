@@ -26,37 +26,12 @@ class ColRepeatCausalLinear(nn.Module):
             self.decay_value = None
         self.cache = torch.tensor([])
 
-    def vector_to_matrix(self, v: torch.Tensor) -> torch.Tensor:
-        """
-        [ a  b  c  d ]
-        [ 0  b  c  d ]
-        [ 0  0  c  d ]
-        [ 0  0  0  d ]
-        """
-        v = v.reshape(-1)  # Ensure v is a 1D tensor
-        m = v.shape[0]
-        # Create index grids for rows and columns
-        i, j = torch.meshgrid(
-            torch.arange(m, device=v.device),
-            torch.arange(m, device=v.device),
-            indexing="ij",
-        )
-        if self.decay_value is not None:
-            M = torch.where(
-                j >= i, v[j]*(torch.clip(self.decay_value, min=0.9, max=1)**((j-i)/self.decay_constant)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
-            )
-        else:
-            M = torch.where(
-                j >= i, v[j], torch.zeros(m, m, device=v.device, dtype=v.dtype)
-            )
-        return M
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, E, S = x.shape
-        x_reshaped = x.reshape(B * E, S)  # (B*E, S)
-        index = x_reshaped.shape[-1]
-        out = self.weight[index]*self.decay_value[index]*x + self.weight[index]*self.decay_value[index]*self.cache + self.bias[index]
-        self.cache = out / self.weight[index] - self.bias[index] # cache update: factor out weight, remove bias
+        x = x.reshape(B * E, S)  # (B*E, S)
+        index = x.shape[-1]
+        out = self.weight[index]*self.decay_value*x + self.weight[index]*self.decay_value*self.cache + self.bias[index]
+        self.cache = (out - self.bias[index]) / self.weight[index] # cache update: factor out weight, remove bias
         out = out.view(B, E, S)  # reshape back
         return out
 
@@ -76,37 +51,12 @@ class RowRepeatCausalLinear(nn.Module):
         else:
             self.decay_value = None
 
-    def vector_to_matrix(self, v: torch.Tensor) -> torch.Tensor:
-        """
-        [ a  a  a  a ]
-        [ 0  b  b  b ]
-        [ 0  0  c  d ]
-        [ 0  0  0  d ]
-        """
-        v = v.reshape(-1)  # Ensure v is a 1D tensor
-        m = v.shape[0]
-        # Create index grids for rows and columns
-        i, j = torch.meshgrid(
-            torch.arange(m, device=v.device),
-            torch.arange(m, device=v.device),
-            indexing="ij",
-        )
-        if self.decay_value is not None:
-            M = torch.where(
-                j >= i, v[i]*(torch.clip(self.decay_value, min=0.9, max=1)**((j-i)/self.decay_constant)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
-            )
-        else:
-            M = torch.where(
-                j >= i, v[i], torch.zeros(m, m, device=v.device, dtype=v.dtype)
-            )
-        return M
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, E, S = x.shape
-        W = self.vector_to_matrix(self.weight).to(x.dtype)
-        x_reshaped = x.reshape(B * E, S)  # (B*E, S)
-        out = x_reshaped @ W  # (B*E, S)
-        out = out + self.bias.to(x.dtype)  # broadcast bias
+        x = x.reshape(B * E, S)  # (B*E, S)
+        out = self.decay*self.weight[index]*x + self.decay*self.cache + self.bias[index]
+        self.cache = out - self.bias[index]
         out = out.view(B, E, S)  # reshape back
         return out
 
