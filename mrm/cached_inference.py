@@ -12,7 +12,7 @@ import shutil
 
 class ColRepeatCausalLinear(nn.Module):
 
-    def __init__(self, dim: int, decay=False, decay_constant=1):
+    def __init__(self, dim: int, embedding_dim=512, decay=False, decay_constant=1):
 
         super().__init__()
 
@@ -24,7 +24,7 @@ class ColRepeatCausalLinear(nn.Module):
             self.decay_constant = decay_constant
         else:
             self.decay_value = None
-        self.cache = torch.tensor([])
+        self.cache = torch.zeros(embedding_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, E, S = x.shape
@@ -38,7 +38,7 @@ class ColRepeatCausalLinear(nn.Module):
 
 class RowRepeatCausalLinear(nn.Module):
 
-    def __init__(self, dim: int, decay=False, decay_constant=1):
+    def __init__(self, dim: int, embedding_dim=512, decay=False, decay_constant=1):
 
         super().__init__()
 
@@ -50,7 +50,7 @@ class RowRepeatCausalLinear(nn.Module):
             self.decay_constant = decay_constant
         else:
             self.decay_value = None
-
+        self.cache = torch.zeros(embedding_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, E, S = x.shape
@@ -62,7 +62,7 @@ class RowRepeatCausalLinear(nn.Module):
 
 class CombinedRepeatCausalLinear(nn.Module):
 
-    def __init__(self, dim: int, decay=None, decay_constant=1):
+    def __init__(self, dim: int, embedding_dim=512, decay=None, decay_constant=1):
 
         super().__init__()
         self.weight = nn.Parameter(torch.randn(2, dim))
@@ -72,80 +72,35 @@ class CombinedRepeatCausalLinear(nn.Module):
             self.decay_constant = decay_constant
         else:
             self.decay_value = None
-
-    def vector_to_rowrepeat(self, v: torch.Tensor) -> torch.Tensor:
-        """
-        [ a  a  a  a ]
-        [ 0  b  b  b ]
-        [ 0  0  c  c ]
-        [ 0  0  0  d ]
-        """
-        v = v.reshape(-1)  # Ensure v is a 1D tensor
-        m = v.shape[0]
-        # Create index grids for rows and columns
-        i, j = torch.meshgrid(
-            torch.arange(m, device=v.device),
-            torch.arange(m, device=v.device),
-            indexing="ij",
-        )
-        if self.decay_value is not None:
-            # NB: 0.95 min, decay_constant=4 for copy
-            M = torch.where(
-                j >= i, v[i]*(torch.clip(self.decay_value[0], min=0.9, max=1)**((j-i))/self.decay_constant), torch.zeros(m, m, device=v.device, dtype=v.dtype)
-            )
-        else:
-            M = torch.where(
-                j >= i, v[i], torch.zeros(m, m, device=v.device, dtype=v.dtype)
-            )
-        return M
-
-    def vector_to_colrepeat(self, v: torch.Tensor) -> torch.Tensor:
-        """
-        [ a  b  c  d ]
-        [ 0  b  c  d ]
-        [ 0  0  c  d ]
-        [ 0  0  0  d ]
-        """
-        v = v.reshape(-1)  # Ensure v is a 1D tensor
-        m = v.shape[0]
-        # Create index grids for rows and columns
-        i, j = torch.meshgrid(
-            torch.arange(m, device=v.device),
-            torch.arange(m, device=v.device),
-            indexing="ij",
-        )
-        if self.decay_value is not None:
-            # NB: 0.95 min, decay_constant=4 for copy
-            M = torch.where(
-                j >= i, v[j]*(torch.clip(self.decay_value[1], min=0.9, max=1)**((j-i)/self.decay_constant)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
-            )
-        else:
-            M = torch.where(
-                j >= i, v[j], torch.zeros(m, m, device=v.device, dtype=v.dtype)
-            )
-        return M
+        self.row_cache = torch.zeros(embedding)
+        self.col_cache = torch.zeros(embedding)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, E, S = x.shape
         Wr = self.vector_to_rowrepeat(self.weight[0]).to(x.dtype)
         Wc = self.vector_to_colrepeat(self.weight[1]).to(x.dtype)
-        x_reshaped = x.reshape(B * E, S)  # (B*E, S)
-        out = x_reshaped @ Wr + x_reshaped @ Wc  # (B*E, S)
-        out = out + self.bias.to(x.dtype)  # broadcast bias
+        x = x.reshape(B * E, S)  # (B*E, S)
+        index = x.shape[-1]
+        # row computation and cache update
+        row_out = self.decay*self.weight[0][index]*x + self.decay*self.cache
+        self.row_cache = row_out
+
+        # col computation and cache update
+        col_out = self.weight[1][index]*self.decay_value*x + self.weight[index]*self.decay_value*self.cache 
+        self.col_cache = out / self.weight[index]
+
+        out = row_out + col_out + self.bias[index]  # (B*E, S)
         out = out.view(B, E, S)  # reshape back
         return out
 
 
 class KernelRepeatLinear(nn.Module):
-    """
-    A linear layer with a triangular (causal) mask applied to the weight matrix.
-    This ensures each position i cannot use info from positions > i.
-    """
-    def __init__(self, dim: int, kernel: int, decay=False, decay_constant=1):
 
+    def __init__(self, dim: int, kernel: int, embedding_dim=512, decay=False, decay_constant=1):
+        
+        # column repeat kernel mixer
         super().__init__()
 
-        # Standard weight + bias
         self.weight = nn.Parameter(torch.randn(kernel, dim))
         self.bias = nn.Parameter(torch.zeros(dim))
         self.kernel = kernel
@@ -155,27 +110,7 @@ class KernelRepeatLinear(nn.Module):
         else:
             self.decay_value = None
 
-    def vector_to_matrix(self, v: torch.Tensor) -> torch.Tensor:
-
-	   # Expects v is a preformed tensor with shape [k, D]
-        m = v.shape[-1] # vector shape
-
-        # Create index grids for rows and columns
-        i, j = torch.meshgrid(
-            torch.arange(m, device=v.device),
-            torch.arange(m, device=v.device),
-            indexing="ij",
-        )
-        if self.decay_value is not None:
-            # NB: 0.95 min, decay_constant=4 for copy
-            M = torch.where(
-                j >= i, v[..., j]*(torch.clip(self.decay_value[1], min=0.9, max=1)**((j-i)/self.decay_constant)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
-            )
-        else:
-            M = torch.where(
-                j >= i, v[..., j], torch.zeros(m, m, device=v.device, dtype=v.dtype)
-            )
-        return M
+        self.cache = torch.zeros(kernel, embedding_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x.to(device)
@@ -186,7 +121,9 @@ class KernelRepeatLinear(nn.Module):
         padded_x = torch.nn.functional.pad(input=x, pad=(0, 0, p, p), mode='constant', value=0)
         padded_e = padded_x.shape[1]
         processed_x = torch.stack([padded_x[:, i:E + i] for i in range(self.kernel)], dim=1)
-        out = processed_x @ W
+         # col computation and cache update
+        out = self.weight[:, index]*self.decay_value*x + self.weight[:, index]*self.decay_value*self.cache 
+        self.cache = out / self.weight[:, index]
         accumulated_output = torch.sum(out, dim=1) + self.bias
         return accumulated_output
 
@@ -195,7 +132,7 @@ class HeadedRepeatCausalLinear(nn.Module):
     Mixed-headed repeat module for ParallelRepeatHeads
     """
 
-    def __init__(self, dim: int, heads: int, decay=False, decay_constant=1):
+    def __init__(self, dim: int, heads: int, head_dim=128, decay=False, decay_constant=1):
 
         super().__init__()
 
@@ -207,64 +144,21 @@ class HeadedRepeatCausalLinear(nn.Module):
             self.decay_value = nn.Parameter(torch.ones(2, 1))
             self.decay_constant = decay_constant
         else:
-            self.decay_value = None
-
-    def vector_to_matrix(self, v: torch.Tensor) -> torch.Tensor:
-        """
-        Given a matrix v of shape (k, m) and head number h >= 0, 
-        returns an (k x m x m) matrix M where M[i, j] = v[i] if 
-        j >= i, and 0 otherwise.
-
-        For example, if v = [[a, b, c, d], [e, f, g, h]], k=2 then M will be:
-
-        [[
-            [ a  a  a  a ]
-            [ 0  b  b  b ]
-            [ 0  0  c  c ]
-            [ 0  0  0  d ]
-        ],
-        [
-            [ a  b  c  d ]
-            [ 0  b  c  d ]
-            [ 0  0  c  d ]
-            [ 0  0  0  d ]
-        ]]
-
-        """
-        # Expects v is a preformed tensor with shape [k, D]
-        m = v.shape[-1] # vector shape
-
-        # Create index grids for rows and columns
-        i, j = torch.meshgrid(
-            torch.arange(m, device=v.device),
-            torch.arange(m, device=v.device),
-            indexing="ij",
-        )
-        if self.decay_value is not None:
-            M = torch.where(
-                j >= i, v[:self.heads//2, j]*(torch.clip(self.decay_value[1], min=0.9, max=1)**((j-i)/self.decay_constant)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
-            )
-            M = torch.cat((M, torch.where(
-                j >= i, v[self.heads//2:, i]*(torch.clip(self.decay_value[1], min=0.9, max=1)**((j-i)/self.decay_constant)), torch.zeros(m, m, device=v.device, dtype=v.dtype)
-            )), dim=0)
-        else:
-            M = torch.where(
-                j >= i, v[:self.heads//2, j], torch.zeros(m, m, device=v.device, dtype=v.dtype)
-            )
-            M = torch.cat((M, torch.where(
-                j >= i, v[self.heads//2:, i], torch.zeros(m, m, device=v.device, dtype=v.dtype)
-            )), dim=0)
-
-        return M
+            self.decay_value = 1
+        self.cache = torch.zeros(heads, head_dim) # first half of cache vectors are row repeat, second half are col repeat
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x.to(device) # x has shape [b * h, e, t]
-        # W has shape [h, t, t] and is repeated to make [b * h, t, t]
-        W = self.vector_to_matrix(self.weight).repeat(x.shape[0]//self.heads, 1, 1) 
-        output = torch.bmm(x, W)
-        repeated_bias = self.bias.repeat(x.shape[0]//self.heads, 1) # [h, t] repeated to [b * h, t]
-        repeated_bias = repeated_bias.unsqueeze(1).repeat(1, x.shape[1], 1) # repeated to [b * h, e, t]
-        output += repeated_bias
+        # row computation and cache update
+        rows_out = self.decay*self.weight[:self.heads//2][index]*x[:self.heads//2] + self.decay*self.cache
+        self.cache[:self.heads//2] = rows_out
+
+        # col computation and cache update
+        cols_out = self.weight[self.heads//2:][index]*self.decay_value*x + self.weight[self.heads//2:][index]*self.decay_value*self.cache 
+        self.cache[self.heads//2:] = out / self.weight[index]
+        
+        output = torch.cat((rows_out, cols_out), dim=0)
+        output += self.bias[:, index]
         return output
 
 class ParallelRepeatHeads(nn.Module):
