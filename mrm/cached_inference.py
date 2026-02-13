@@ -41,7 +41,6 @@ class RowRepeatCausalLinear(nn.Module):
     def __init__(self, dim: int, embedding_dim=512, decay=False, decay_constant=1):
 
         super().__init__()
-
         # Standard weight + bias
         self.weight = nn.Parameter(torch.randn(1, dim))
         self.bias = nn.Parameter(torch.zeros(dim))
