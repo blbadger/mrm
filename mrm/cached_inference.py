@@ -10,9 +10,10 @@ import os
 from dotenv import load_dotenv
 import shutil
 
+
 class ColRepeatCausalLinear(nn.Module):
 
-    def __init__(self, dim: int, embedding_dim=512, decay=False, decay_constant=1):
+    def __init__(self, dim: int, embedding_dim=256, decay=False, **args):
 
         super().__init__()
 
@@ -21,24 +22,27 @@ class ColRepeatCausalLinear(nn.Module):
         self.bias = nn.Parameter(torch.zeros(dim))
         if decay:
             self.decay_value = nn.Parameter(torch.ones(1))
-            self.decay_constant = decay_constant
         else:
-            self.decay_value = None
-        self.cache = torch.zeros(embedding_dim)
+            self.decay_value = 1
+        self.cache = torch.zeros(embedding_dim) # put on device
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, E, S = x.shape
+        print (x, cache)
+        self.cache = self.cache.to(x.device)
         x = x.reshape(B * E, S)  # (B*E, S)
-        index = x.shape[-1]
-        out = self.weight[index]*self.decay_value*x + self.weight[index]*self.decay_value*self.cache + self.bias[index]
-        self.cache = (out - self.bias[index]) / self.weight[index] # cache update: factor out weight, remove bias
-        out = out.view(B, E, S)  # reshape back
+        index = x.shape[-1] - 1 # TODO: pass index from high level, no way of knowing here
+        out = self.weight[0, index]*self.decay_value*x[..., index] + self.weight[0, index]*self.decay_value*self.cache + self.bias[index]
+        print (out)
+        self.cache = (out - self.bias[index]) / self.weight[0, index] # cache update: factor out weight, remove bias
+        print (self.cache)
+        out = out.view(B, E, 1)
         return out
 
 
 class RowRepeatCausalLinear(nn.Module):
 
-    def __init__(self, dim: int, embedding_dim=512, decay=False, decay_constant=1):
+    def __init__(self, dim: int, embedding_dim=256, decay=False, **args):
 
         super().__init__()
 
@@ -47,17 +51,18 @@ class RowRepeatCausalLinear(nn.Module):
         self.bias = nn.Parameter(torch.zeros(dim))
         if decay:
             self.decay_value = nn.Parameter(torch.ones(1))
-            self.decay_constant = decay_constant
         else:
-            self.decay_value = None
+            self.decay_value = 1
         self.cache = torch.zeros(embedding_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, E, S = x.shape
+        self.cache = self.cache.to(x.device)
         x = x.reshape(B * E, S)  # (B*E, S)
-        out = self.decay*self.weight[index]*x + self.decay*self.cache + self.bias[index]
+        index = x.shape[-1] - 1
+        out = self.decay_value*self.weight[0, index]*x[..., -1] + self.decay_value*self.cache + self.bias[index]
         self.cache = out - self.bias[index]
-        out = out.view(B, E, S)  # reshape back
+        out = out.view(B, E, 1)  # reshape back
         return out
 
 class CombinedRepeatCausalLinear(nn.Module):
@@ -82,11 +87,11 @@ class CombinedRepeatCausalLinear(nn.Module):
         x = x.reshape(B * E, S)  # (B*E, S)
         index = x.shape[-1]
         # row computation and cache update
-        row_out = self.decay*self.weight[0][index]*x + self.decay*self.cache
+        row_out = self.decay*self.weight[0, index]*x + self.decay*self.cache
         self.row_cache = row_out
 
         # col computation and cache update
-        col_out = self.weight[1][index]*self.decay_value*x + self.weight[index]*self.decay_value*self.cache 
+        col_out = self.weight[1, index]*self.decay_value*x + self.weight[1, index]*self.decay_value*self.cache 
         self.col_cache = out / self.weight[index]
 
         out = row_out + col_out + self.bias[index]  # (B*E, S)
@@ -384,7 +389,7 @@ class CachedMLPMixer(nn.Module):
         use_projections=True
     ):
 
-        super(MLPMixer, self).__init__()
+        super().__init__()
 
         self.vocab_size = vocab_size
         self.hidden_dim = hidden_dim
@@ -410,7 +415,7 @@ class CachedMLPMixer(nn.Module):
     def _init_weights(self):
         for m in self.modules():
             if isinstance(m, nn.Linear) or isinstance(m, ColRepeatCausalLinear) or isinstance(m, RowRepeatCausalLinear) or isinstance(m, CombinedRepeatCausalLinear) \
-            or isinstance(m, DiagonalColCausalLinear) or isinstance(m, KernelRepeatLinear) or isinstance(m, HeadedRepeatCausalLinear):
+            or isinstance(m, KernelRepeatLinear) or isinstance(m, HeadedRepeatCausalLinear):
                 # Kaiming He initialization for Swish activation
                 nn.init.kaiming_normal_(m.weight)
                 if m.bias is not None:

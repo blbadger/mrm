@@ -12,8 +12,9 @@ import os
 from dotenv import load_dotenv
 import shutil
 from repeat_main import MLPMixer
+from cached_inference import CachedMLPMixer
 
-class InferenceMLPMixer(MLPMixer, GenerationMixin):
+class InferenceMLPMixer(CachedMLPMixer, GenerationMixin):
 
 	def __init__(
 		self,
@@ -26,10 +27,10 @@ class InferenceMLPMixer(MLPMixer, GenerationMixin):
 		expanded_convs=False,
 		copy=False,        
 		mixed_heads=False,
-        combined_heads=False,
-        decay=False,
-        parallel_heads=False,
-        use_projections=True
+        	combined_heads=False,
+        	decay=False,
+	        parallel_heads=False,
+	        use_projections=True
 	):
 		super().__init__(vocab_size, hidden_dim, seq_len, num_blocks, heads=heads, kernel=kernel, expanded_convs=expanded_convs, copy=copy, 
 			mixed_heads=mixed_heads, combined_heads=combined_heads, decay=decay, parallel_heads=parallel_heads, use_projections=use_projections)
@@ -46,6 +47,7 @@ class InferenceMLPMixer(MLPMixer, GenerationMixin):
 		self.config = LlamaConfig(**config)
 		self.main_input_name = 'input_ids'
 		self._supports_cache_class = False
+		self.cache_built = False
 		self.device = self.output_layer.weight.device
 
 	def can_generate(self):
@@ -54,20 +56,30 @@ class InferenceMLPMixer(MLPMixer, GenerationMixin):
 	def count_params(self):
 		return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
+	def build_cache(self, input_ids):
+		for i in range(len(input_ids)):
+			x = self.input_layer(input_ids[:, i].unsqueeze(1))
+			for block in self.mixer_blocks:
+				x = block(x)
+		self.cache_built = True
+		return	
+
 	def forward(self, input_ids, labels=None, **kwargs):
 		# pad input_ids
-		pad_sizes = [self.seq_len - len(input_ids[i]) for i in range(len(input_ids))]
-		input_lengths = [len(input_ids[i]) for i in range(len(input_ids))]
+		#pad_sizes = [self.seq_len - len(input_ids[i]) for i in range(len(input_ids))]
+		#input_lengths = [len(input_ids[i]) for i in range(len(input_ids))]
 
-		padded_inputs = []
-		for i in range(len(input_ids)):
-			input_id_arr = input_ids[i].unsqueeze(0)
-			pad = torch.ones(pad_sizes[i], dtype=torch.long).to(input_ids.device).unsqueeze(0)
-			padded_input = torch.cat((input_id_arr, pad), dim=1)
-			padded_inputs.append(padded_input)
-		input_ids = torch.cat(padded_inputs, dim=0)
-		labels = torch.where(input_ids==1, -100, input_ids) #mask pad token loss
+		#padded_inputs = []
+		#for i in range(len(input_ids)):
+		#	input_id_arr = input_ids[i].unsqueeze(0)
+		#	pad = torch.ones(pad_sizes[i], dtype=torch.long).to(input_ids.device).unsqueeze(0)
+		#	padded_input = torch.cat((input_id_arr, pad), dim=1)
+		#	padded_inputs.append(padded_input)
+		#input_ids = torch.cat(padded_inputs, dim=0)
+		#labels = torch.where(input_ids==1, -100, input_ids) #mask pad token loss
 
+		if not self.cache_built:
+			self.build_cache(input_ids)
 		if labels is not None:
 			labels = labels[:, 1:].contiguous()
 
@@ -76,22 +88,12 @@ class InferenceMLPMixer(MLPMixer, GenerationMixin):
 		for block in self.mixer_blocks:
 			x = block(x)
 		logits = self.output_layer(x)
-		logits = logits[:, :-1].contiguous()
-
-		truncated_logits = []
-		for i in range(logits.shape[0]):
-			truncated_logits.append(logits[i, :input_lengths[i]])
-		truncated_logits = torch.stack(truncated_logits, dim=0)
+		logits = logits[:, -1].unsqueeze(1).contiguous()
 
 		if labels is not None:
-			logits = logits.view(-1, self.vocab_size)
-			labels = labels.view(-1)
-
-			loss = self.loss_fn(logits, labels)
-			print (loss)
-			return CausalLMOutput(loss=loss, logits=truncated_logits)
+			return CausalLMOutput(loss=0, logits=logits)
 		else:
-			return CausalLMOutput(loss=0, logits=truncated_logits)
+			return CausalLMOutput(loss=0, logits=logits)
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -114,10 +116,10 @@ if __name__ == "__main__":
         n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
         mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True).float().to(device)
 
-    generation_config = GenerationConfig(do_sample=True, top_p=0.9)
+    generation_config = GenerationConfig() #do_sample=True, top_p=0.9)
     print (model)
     load_model(model, f"{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors")
-    text = '''Taylor Swift was born in the year'''
+    text = 'Taylor Swift was born in'
     input_ids = torch.tensor(tokenizer.encode(text)[1:]).unsqueeze(0).to(device) # ignore bos token
     print (input_ids)
     output_ids = model.generate(input_ids, max_length=len(input_ids[0]) + 50, generation_config=generation_config)
