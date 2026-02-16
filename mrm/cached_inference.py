@@ -28,15 +28,17 @@ class ColRepeatCausalLinear(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, E, S = x.shape
-        print (x, cache)
+        print (x, self.cache)
+        decay_value = torch.clip(self.decay_value, min=0.9, max=1)
         self.cache = self.cache.to(x.device)
         x = x.reshape(B * E, S)  # (B*E, S)
         index = x.shape[-1] - 1 # TODO: pass index from high level, no way of knowing here
-        out = self.weight[0, index]*self.decay_value*x[..., index] + self.weight[0, index]*self.decay_value*self.cache + self.bias[index]
-        print (out)
+        out = self.weight[0, index]*decay_value*x[..., index] + self.weight[0, index]*decay_value*self.cache + self.bias[index]
+        print (f"Index: {index}, weight: {self.weight[0, index]}, index: {index}, decay_value: {self.decay_value}, bias: {self.bias[index]}")
         self.cache = (out - self.bias[index]) / self.weight[0, index] # cache update: factor out weight, remove bias
-        print (self.cache)
-        out = out.view(B, E, 1)
+        x[..., -1] = out
+        out = x
+        out = out.view(B, E, S)
         return out
 
 
@@ -57,12 +59,15 @@ class RowRepeatCausalLinear(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, E, S = x.shape
+        decay_value = torch.clip(self.decay_value, min=0.9, max=1)
         self.cache = self.cache.to(x.device)
         x = x.reshape(B * E, S)  # (B*E, S)
         index = x.shape[-1] - 1
-        out = self.decay_value*self.weight[0, index]*x[..., -1] + self.decay_value*self.cache + self.bias[index]
+        out = decay_value*self.weight[0, index]*x[..., -1] + decay_value*self.cache + self.bias[index]
         self.cache = out - self.bias[index]
-        out = out.view(B, E, 1)  # reshape back
+        x[..., -1] = out
+        out = x
+        out = out.view(B, E, S)  # reshape back
         return out
 
 class CombinedRepeatCausalLinear(nn.Module):

@@ -58,7 +58,7 @@ class InferenceMLPMixer(CachedMLPMixer, GenerationMixin):
 
 	def build_cache(self, input_ids):
 		for i in range(len(input_ids)):
-			x = self.input_layer(input_ids[:, i].unsqueeze(1))
+			x = self.input_layer(input_ids[:, :i+1])
 			for block in self.mixer_blocks:
 				x = block(x)
 		self.cache_built = True
