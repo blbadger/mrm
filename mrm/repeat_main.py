@@ -6,6 +6,7 @@ from transformers import AutoTokenizer
 import datasets
 from datasets import load_from_disk
 import mlflow
+from prettytable import PrettyTable
 import os
 from dotenv import load_dotenv
 import shutil
@@ -249,7 +250,7 @@ class RowRepeatCausalLinear(nn.Module):
         else:
             M = torch.where(
                 j >= i, v[i], torch.zeros(m, m, device=v.device, dtype=v.dtype)
-            )
+            ); print (M)
         return M
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -768,6 +769,19 @@ def copy_dataset(input_ids):
         input_ids[i] = copied_halves
     return input_ids
 
+def count_parameters(model):
+    table = PrettyTable(["Modules", "Parameters"])
+    total_params = 0
+    for name, parameter in model.named_parameters():
+        if not parameter.requires_grad:
+            continue
+        params = parameter.numel()
+        table.add_row([name, params])
+        total_params += params
+    print(table)
+    print(f"Total Trainable Params: {total_params}")
+    return total_params
+
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 if __name__ == "__main__":
@@ -779,22 +793,22 @@ if __name__ == "__main__":
     n_vocab = len(tokenizer)
     print("Vocab size: ", n_vocab)
 
-    tokenized_length = 1024
-    dim = 1024
-    layers = 16
+    tokenized_length = 512
+    dim = 1280
+    layers = 20
     n_heads = 4
     kernel= 1
 
     model = MLPMixer(
         n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True)
-
+    count_parameters(model)
     #model = torch.compile(model)
-
+    
     n_gpus = torch.cuda.device_count()
     total_batch_size = 64 #  128
     batch_size = total_batch_size // n_gpus
-    train_path = f"{data_root}/fineweb-edu-tokenized-train-c1024"
-    test_path = f"{data_root}/fineweb-edu-tokenized-test-c1024"
+    train_path = f"{data_root}/fineweb-edu-tokenized-train-c512"
+    test_path = f"{data_root}/fineweb-edu-tokenized-test-c512"
     output_dir = f"{checkpoint_root}/fineweb_h{n_heads}_decay_nonparallel_mixed_projs_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
   
     datasets.config.IN_MEMORY_MAX_SIZE = 1e9
@@ -809,7 +823,8 @@ if __name__ == "__main__":
         num_train_epochs=2,
         per_device_train_batch_size=batch_size,
         per_device_eval_batch_size=batch_size,
-        warmup_steps=50,
+        gradient_accumulation_steps=2,
+	warmup_steps=50,
         eval_steps=4000,
         save_steps=8000,
         learning_rate=5e-4,
@@ -838,4 +853,4 @@ if __name__ == "__main__":
     shutil.copy(code_path, output_dir) 
 
     model.train()
-    trainer.train(output_dir + '/checkpoint-184000')
+    trainer.train()
