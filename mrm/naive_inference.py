@@ -33,7 +33,8 @@ class InferenceMLPMixer(MLPMixer, GenerationMixin):
         combined_heads=False,
         decay=False,
         parallel_heads=False,
-        use_projections=True
+        use_projections=True,
+        dropout_layer=False
 	):
 		super().__init__(vocab_size, hidden_dim, seq_len, num_blocks, heads=heads, kernel=kernel, expanded_convs=expanded_convs, copy=copy, 
 			mixed_heads=mixed_heads, combined_heads=combined_heads, decay=decay, parallel_heads=parallel_heads, use_projections=use_projections)
@@ -51,6 +52,15 @@ class InferenceMLPMixer(MLPMixer, GenerationMixin):
 		self.main_input_name = 'input_ids'
 		self._supports_cache_class = False
 		self.device = self.output_layer.weight.device
+		if dropout_layer:
+			# overwrite original channel mixing layer with dropout included
+			for i in range(len(self.mixer_blocks)):
+				self.mixer_blocks[i].channel_mixing_layer = nn.Sequential(
+				nn.Linear(hidden_dim, hidden_dim * expansion_factor),
+				nn.SiLU(),
+				nn.Dropout(0.),
+				nn.Linear(hidden_dim * expansion_factor, hidden_dim),
+			)
 
 	def can_generate(self):
 		return True
