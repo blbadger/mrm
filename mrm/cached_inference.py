@@ -39,11 +39,9 @@ class ColRepeatCausalLinear(nn.Module):
         out = out.view(B, E, S)
         return out
 
-
 class RowRepeatCausalLinear(nn.Module):
 
     def __init__(self, dim: int, embedding_dim=256, decay=False, **args):
-
         super().__init__()
 
         # Standard weight + bias
