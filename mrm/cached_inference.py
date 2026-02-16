@@ -212,7 +212,7 @@ class MixedRepeatHeads(nn.Module):
 
         self.hidden_dim = hidden_dim
         self.mixer_heads = nn.ModuleList(
-            [ColRepeatCausalLinear(seq_len, decay=decay, decay_constant=seq_len//512) for i in range(n_heads//2)] + [RowRepeatCausalLinear(seq_len, decay=decay, decay_constant=seq_len//512) for i in range(n_heads//2)]
+            [ColRepeatCausalLinear(seq_len, embedding_dim=hidden_dim, decay=decay, decay_constant=seq_len//512) for i in range(n_heads//2)] + [RowRepeatCausalLinear(seq_len, embedding_dim=hidden_dim, decay=decay, decay_constant=seq_len//512) for i in range(n_heads//2)]
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -353,7 +353,7 @@ class MixerBlock(nn.Module):
             elif kernel is not None and kernel > 1:
                 self.token_mixing_layer = KernelRepeatLinear(seq_len, kernel=kernel, decay=decay, decay_constant=seq_len//256)
             else:
-                self.token_mixing_layer = ColRepeatCausalLinear(seq_len) 
+                self.token_mixing_layer = RowRepeatCausalLinear(seq_len, embedding_dim=hidden_dim) # TODO: add modular switch
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         res = x

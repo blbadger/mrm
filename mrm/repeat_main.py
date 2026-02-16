@@ -668,7 +668,7 @@ class MixerBlock(nn.Module):
             elif kernel is not None and kernel > 1:
                 self.token_mixing_layer = KernelRepeatLinear(seq_len, kernel=kernel, decay=decay, decay_constant=seq_len//256)
             else:
-                self.token_mixing_layer = ColRepeatCausalLinear(seq_len)
+                self.token_mixing_layer = RowRepeatCausalLinear(seq_len) #TODO: revert to col
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         res = x
@@ -794,22 +794,22 @@ if __name__ == "__main__":
     print("Vocab size: ", n_vocab)
 
     tokenized_length = 512
-    dim = 1280
-    layers = 20
+    dim = 512
+    layers = 16
     n_heads = 4
     kernel= 1
 
     model = MLPMixer(
-        n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True)
+        n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, mixed_heads=False, combined_heads=False, decay=True, parallel_heads=False, use_projections=True)
     count_parameters(model)
     #model = torch.compile(model)
     
     n_gpus = torch.cuda.device_count()
-    total_batch_size = 64 #  128
+    total_batch_size = 128 #  128
     batch_size = total_batch_size // n_gpus
     train_path = f"{data_root}/fineweb-edu-tokenized-train-c512"
     test_path = f"{data_root}/fineweb-edu-tokenized-test-c512"
-    output_dir = f"{checkpoint_root}/fineweb_h{n_heads}_decay_nonparallel_mixed_projs_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
+    output_dir = f"{checkpoint_root}/fineweb_h{n_heads}_decay_nonparallel_col_projs_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
   
     datasets.config.IN_MEMORY_MAX_SIZE = 1e9
     train_dataset = load_from_disk(train_path, keep_in_memory=None)
@@ -823,7 +823,7 @@ if __name__ == "__main__":
         num_train_epochs=2,
         per_device_train_batch_size=batch_size,
         per_device_eval_batch_size=batch_size,
-        gradient_accumulation_steps=2,
+        gradient_accumulation_steps=1,
 	warmup_steps=50,
         eval_steps=4000,
         save_steps=8000,

@@ -44,7 +44,7 @@ class InferenceMLPMixer(CachedMLPMixer, GenerationMixin):
 		config  = {
 				 'hidden_size':hidden_dim,
 				 'intermediate_size': 4*hidden_dim,
-				 'num_hidden_layers': layers,
+				 'num_hidden_layers': num_blocks,
 				 'num_attention_heads': 4,
 				 'vocab_size': vocab_size
 			 }
@@ -57,10 +57,10 @@ class InferenceMLPMixer(CachedMLPMixer, GenerationMixin):
 			# overwrite original dropout layer with dropout included
 			for i in range(len(self.mixer_blocks)):
 				self.mixer_blocks[i].channel_mixing_layer = nn.Sequential(
-				nn.Linear(hidden_dim, hidden_dim * expansion_factor),
+				nn.Linear(hidden_dim, hidden_dim * self.mixer_blocks[i].expansion_factor),
 				nn.SiLU(),
 				nn.Dropout(0.),
-				nn.Linear(hidden_dim * expansion_factor, hidden_dim),
+				nn.Linear(hidden_dim * self.mixer_blocks[i].expansion_factor, hidden_dim),
 			)
 
 	def can_generate(self):
@@ -88,7 +88,6 @@ class InferenceMLPMixer(CachedMLPMixer, GenerationMixin):
 			x = block(x)
 		logits = self.output_layer(x)
 		logits = logits[:, -1].unsqueeze(1).contiguous()
-		print (logits)
 		if labels is not None:
 			return CausalLMOutput(loss=0, logits=logits)
 		else:
