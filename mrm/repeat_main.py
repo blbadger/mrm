@@ -250,7 +250,7 @@ class RowRepeatCausalLinear(nn.Module):
         else:
             M = torch.where(
                 j >= i, v[i], torch.zeros(m, m, device=v.device, dtype=v.dtype)
-            )
+            ); print (M)
         return M
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

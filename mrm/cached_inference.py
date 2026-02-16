@@ -23,18 +23,16 @@ class ColRepeatCausalLinear(nn.Module):
         if decay:
             self.decay_value = nn.Parameter(torch.ones(1))
         else:
-            self.decay_value = 1
+            self.decay_value = torch.ones(1)
         self.cache = torch.zeros(embedding_dim) # put on device
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, E, S = x.shape
-        print (x, self.cache)
-        decay_value = torch.clip(self.decay_value, min=0.9, max=1)
+        decay_value = torch.clip(self.decay_value, min=0.9, max=1).to(x.device)
         self.cache = self.cache.to(x.device)
         x = x.reshape(B * E, S)  # (B*E, S)
         index = x.shape[-1] - 1 # TODO: pass index from high level, no way of knowing here
         out = self.weight[0, index]*decay_value*x[..., index] + self.weight[0, index]*decay_value*self.cache + self.bias[index]
-        print (f"Index: {index}, weight: {self.weight[0, index]}, index: {index}, decay_value: {self.decay_value}, bias: {self.bias[index]}")
         self.cache = (out - self.bias[index]) / self.weight[0, index] # cache update: factor out weight, remove bias
         x[..., -1] = out
         out = x
@@ -54,16 +52,16 @@ class RowRepeatCausalLinear(nn.Module):
         if decay:
             self.decay_value = nn.Parameter(torch.ones(1))
         else:
-            self.decay_value = 1
+            self.decay_value = torch.ones(1)
         self.cache = torch.zeros(embedding_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, E, S = x.shape
-        decay_value = torch.clip(self.decay_value, min=0.9, max=1)
+        decay_value = torch.clip(self.decay_value, min=0.9, max=1).to(x.device)
         self.cache = self.cache.to(x.device)
         x = x.reshape(B * E, S)  # (B*E, S)
         index = x.shape[-1] - 1
-        out = decay_value*self.weight[0, index]*x[..., -1] + decay_value*self.cache + self.bias[index]
+        out = self.weight[0, index]*decay_value*x[..., index] + decay_value*self.cache + self.bias[index]
         self.cache = out - self.bias[index]
         x[..., -1] = out
         out = x
@@ -358,7 +356,7 @@ class MixerBlock(nn.Module):
             elif kernel is not None and kernel > 1:
                 self.token_mixing_layer = KernelRepeatLinear(seq_len, kernel=kernel, decay=decay, decay_constant=seq_len//256)
             else:
-                self.token_mixing_layer = ColRepeatCausalLinear(seq_len)
+                self.token_mixing_layer = ColRepeatCausalLinear(seq_len) 
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         res = x
