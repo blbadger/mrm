@@ -95,7 +95,7 @@ class InferenceMLPMixer(CachedMLPMixer, GenerationMixin):
 			return CausalLMOutput(loss=0, logits=logits)
 
 
-class RecurrentInference(CachedMLPMixer, GenerationMixin):
+class RecurrentInference(RecurrentMLPMixer, GenerationMixin):
 
 	def __init__(
 		self,
