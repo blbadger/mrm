@@ -21,7 +21,7 @@ class ColRepeatCausalLinear(nn.Module):
         self.weight = nn.Parameter(torch.randn(1, dim))
         self.bias = nn.Parameter(torch.zeros(dim))
         if decay:
-            self.decay_value = nn.Parameter(torch.ones(1))
+            self.decay_value = nn.Parameter(torch.ones(1)) # TODO: revert to ones only
         else:
             self.decay_value = torch.ones(1)
         self.cache = torch.zeros(embedding_dim) # put on device
@@ -32,7 +32,7 @@ class ColRepeatCausalLinear(nn.Module):
         self.cache = self.cache.to(x.device)
         x = x.reshape(B * E, S)  # (B*E, S)
         index = x.shape[-1] - 1 # TODO: pass index from high level, no way of knowing here
-        out = self.weight[0, index]*decay_value*x[..., index] + self.weight[0, index]*decay_value*self.cache + self.bias[index]
+        out = self.weight[0, index]*x[..., index] + self.weight[0, index]*decay_value*self.cache + self.bias[index]
         self.cache = (out - self.bias[index]) / self.weight[0, index] # cache update: factor out weight, remove bias
         x[..., -1] = out
         out = x
@@ -58,7 +58,7 @@ class RowRepeatCausalLinear(nn.Module):
         self.cache = self.cache.to(x.device)
         x = x.reshape(B * E, S)  # (B*E, S)
         index = x.shape[-1] - 1
-        out = self.weight[0, index]*decay_value*x[..., index] + decay_value*self.cache + self.bias[index]
+        out = self.weight[0, index]*x[..., index] + decay_value*self.cache + self.bias[index]
         self.cache = out - self.bias[index]
         x[..., -1] = out
         out = x

@@ -222,11 +222,11 @@ def test_mixed_row_col_decay_equivalence(trained_model=False):
         n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
         mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True).float().to(device)
 
-    model.load_state_dict(cached_model.state_dict())
+    #model.load_state_dict(cached_model.state_dict())
     generation_config = GenerationConfig()
     print (model)
-    #load_model(model, f"{checkpoint_root}/fineweb_h4_decay_mixedrepeat_k1_1024_n16_c512_b32x4/checkpoint-200000/model.safetensors")
-    #load_model(cached_model, f"{checkpoint_root}/fineweb_h4_decay_mixedrepeat_k1_1024_n16_c512_b32x4/checkpoint-200000/model.safetensors")
+    load_model(model, f"{checkpoint_root}/fineweb_h4_decay_mixedrepeat_k1_1024_n16_c512_b32x4/checkpoint-200000/model.safetensors")
+    load_model(cached_model, f"{checkpoint_root}/fineweb_h4_decay_mixedrepeat_k1_1024_n16_c512_b32x4/checkpoint-200000/model.safetensors")
 
     text ='''Four score and seven years ago, our'''
     input_ids = torch.tensor(tokenizer.encode(text)[1:]).unsqueeze(0).to(device) # ignore bos token
