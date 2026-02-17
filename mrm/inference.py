@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 import shutil
 from repeat_main import MLPMixer
 from cached_inference import CachedMLPMixer
+from recurrent_inference import RecurrentMLPMixer
 from transformers import TextStreamer
 import warnings
 warnings.simplefilter(action='ignore', category=UserWarning)

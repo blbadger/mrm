@@ -358,7 +358,7 @@ class MixerBlock(nn.Module):
         return x
 
 
-class CachedMLPMixer(nn.Module):
+class RecurrentMLPMixer(nn.Module):
 
     def __init__(
         self,
