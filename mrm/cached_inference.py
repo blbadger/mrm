@@ -137,7 +137,7 @@ class HeadedRepeatCausalLinear(nn.Module):
     Mixed-headed repeat module for ParallelRepeatHeads
     """
 
-    def __init__(self, dim: int, heads: int, head_dim=128, decay=False, decay_constant=1):
+    def __init__(self, dim: int, heads: int, head_dim=256, decay=False, decay_constant=1):
 
         super().__init__()
 
@@ -154,17 +154,21 @@ class HeadedRepeatCausalLinear(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x.to(device) # x has shape [b * h, e, t]
+        x = rearrange(x, '(b h) e t -> h b e t', h=self.heads)
+        index = x.shape[-1] - 1
+        self.cache = self.cache.to(x.device)
         decay_value = (torch.clip(self.decay_value[1], min=0.9, max=1)**(1/self.decay_constant)).to(x.device)
         # row computation and cache update
-        row_out = self.weight[0, index]*x[..., index] + decay_value[0]*self.cache
-        self.row_cache = out
+        row_out = self.weight[:self.heads//2, index]*x[:self.heads//2, :, :, index] + decay_value[0]*self.cache[:self.heads//2]
+        self.cache[:self.heads//2] = row_out
 
         # col computation and cache update
-        col_out = self.weight[0, index]*x[..., index] + self.weight[0, index]*decay_value[1]*self.cache
-        self.col_cache = out / self.weight[index]
+        col_out = self.weight[self.heads//2:, index]*x[self.heads//2:, :, :, index] + self.weight[self.heads//2:, index]*decay_value[1]*self.cache[self.heads//2:]
+        self.cache[self.heads//2:] = row_out / self.weight[self.heads//2:, index]
         
         output = torch.cat((row_out, col_out), dim=0)
         output += self.bias[:, index]
+        output = rearrange(output, 'h b e t -> (b h) e t', h=self.heads)
         return output
 
 class ParallelRepeatHeads(nn.Module):
@@ -184,7 +188,7 @@ class ParallelRepeatHeads(nn.Module):
         self.n_heads = n_heads
         self.in_proj = nn.Linear(dim, dim)
         self.out_proj = nn.Linear(dim, dim)
-        self.mixer_heads = HeadedRepeatCausalLinear(seq_len, n_heads, decay=decay, decay_constant=seq_len//512)
+        self.mixer_heads = HeadedRepeatCausalLinear(seq_len, n_heads, head_dim=hidden_dim, decay=decay, decay_constant=seq_len//512)
         self.use_projections = use_projections
     
     def forward(self, x:torch.Tensor) -> torch.Tensor:

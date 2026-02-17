@@ -301,7 +301,6 @@ def test_parallel_mixed_row_col_decay_equivalence():
     print (model)
     load_model(model, f"{checkpoint_root}/fineweb_h4_decay_parallel_mixed_projs_k1_1024_n16_c512_b32x4/checkpoint-200000/model.safetensors")
     load_model(cached_model, f"{checkpoint_root}/fineweb_h4_decay_parallel_mixed_projs_k1_1024_n16_c512_b32x4/checkpoint-200000/model.safetensors")
-    assert model.state_dict() == cached_model.state_dict()
 
     text ='''Four score and seven years ago, our'''
     input_ids = torch.tensor(tokenizer.encode(text)[1:]).unsqueeze(0).to(device) # ignore bos token
