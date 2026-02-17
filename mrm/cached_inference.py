@@ -24,11 +24,12 @@ class ColRepeatCausalLinear(nn.Module):
             self.decay_value = nn.Parameter(torch.ones(1)) # TODO: revert to ones only
         else:
             self.decay_value = torch.ones(1)
+        self.decay_constant = decay_constant
         self.cache = torch.zeros(embedding_dim) # put on device
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, E, S = x.shape
-        decay_value = (torch.clip(self.decay_value, min=0.9, max=1)**(1/decay_constant)).to(x.device)
+        decay_value = (torch.clip(self.decay_value, min=0.9, max=1)**(1/self.decay_constant)).to(x.device)
         self.cache = self.cache.to(x.device)
         x = x.reshape(B * E, S)  # (B*E, S)
         index = x.shape[-1] - 1 # TODO: pass index from high level, no way of knowing here
@@ -50,6 +51,7 @@ class RowRepeatCausalLinear(nn.Module):
             self.decay_value = nn.Parameter(torch.ones(1))
         else:
             self.decay_value = torch.ones(1)
+        self.decay_constant = decay_constant
         self.cache = torch.zeros(embedding_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
