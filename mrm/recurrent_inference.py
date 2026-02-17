@@ -26,7 +26,6 @@ class ColRepeatCausalLinear(nn.Module):
         self.cache = torch.zeros(embedding_dim).to('cuda')
 
     def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
-        # expects x in shape [B, E]
         decay_value = (torch.clip(self.decay_value, min=0.9, max=1)**(1/self.decay_constant)).to(x.device)
         out = self.weight[0, index]*x + self.weight[0, index]*decay_value*self.cache + self.bias[index]
         self.cache = (out - self.bias[index]) / self.weight[0, index] # cache update: factor out weight, remove bias
@@ -49,7 +48,7 @@ class RowRepeatCausalLinear(nn.Module):
     def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
         # expects x in shape [B, E]
         decay_value = (torch.clip(self.decay_value, min=0.9, max=1)**(1/self.decay_constant)).to(x.device)
-        out = self.weight[0, index]*x[..., index] + decay_value*self.cache + self.bias[index]
+        out = self.weight[0, index]*x + decay_value*self.cache + self.bias[index]
         self.cache = out - self.bias[index]
         return out
 
@@ -205,28 +204,23 @@ class MixedRepeatHeads(nn.Module):
 
     def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
         activations = []
-        if self.use_projections:
-            x = rearrange(x, "b e t -> b t e")
         # pre-concatenated out projection
         for head in range(self.n_heads):
             if self.use_projections:
                 projection = self.proj_head[head](x)
-                projection = rearrange(projection, "b t e -> b e t")
             else:
                 projection = x[:, head*self.hidden_dim: (head+1)*self.hidden_dim, :]
                 if torch.is_autocast_enabled():
                     projection = projection.to(torch.float16)
 
             conv_projection = self.mixer_heads[head](projection, index)
-            rearranged_conv = rearrange(conv_projection, "b e t -> b t e")
-            activations.append(rearranged_conv)
+            activations.append(conv_projection)
 
         # concatenate and project multi-headed output
-        hidden_layer = torch.cat(activations, dim=2)
+        hidden_layer = torch.cat(activations, dim=1)
         if self.use_projections:
             hidden_layer = self.out_proj(hidden_layer)
 
-        hidden_layer = rearrange(hidden_layer, "b t e -> b e t")
         return hidden_layer
 
 class RepeatHeads(nn.Module):
@@ -351,9 +345,7 @@ class MixerBlock(nn.Module):
 
         res = x
         x = self.token_norm(x)
-        x = x.transpose(1, 2)
         x = self.token_mixing_layer(x, index)
-        x = x.transpose(1, 2)
         x = x + res
         return x
 

@@ -148,8 +148,8 @@ class RecurrentInference(RecurrentMLPMixer, GenerationMixin):
 		return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
 	def build_cache(self, input_ids):
-		for i in range(1, len(input_ids[0])):
-			x = self.input_layer(input_ids[:, :i])
+		for i in range(len(input_ids[0])-1):
+			x = self.input_layer(input_ids[:, i])
 			for block in self.mixer_blocks:
 				x = block(x, i)
 		self.cache_built = True
@@ -166,9 +166,7 @@ class RecurrentInference(RecurrentMLPMixer, GenerationMixin):
 		x = self.input_layer(input_ids)
 		for block in self.mixer_blocks:
 			x = block(x, index)
-		self.index += 1
-		logits = self.output_layer(x)
-		logits = logits[:, -1].unsqueeze(1).contiguous()
+		logits = self.output_layer(x).unsqueeze(1)
 		if labels is not None:
 			return CausalLMOutput(loss=0, logits=logits)
 		else:
