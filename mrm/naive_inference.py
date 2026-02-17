@@ -101,7 +101,6 @@ class InferenceMLPMixer(MLPMixer, GenerationMixin):
 			labels = labels.view(-1)
 
 			loss = self.loss_fn(logits, labels)
-			print (loss)
 			return CausalLMOutput(loss=loss, logits=truncated_logits)
 		else:
 			return CausalLMOutput(loss=0, logits=truncated_logits)

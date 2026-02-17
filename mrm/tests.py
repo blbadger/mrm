@@ -329,7 +329,7 @@ def test_recurrent_row_repeat_equivalence(trained_model=True):
     n_heads = None
     kernel = 1
 
-    cached_model = CachedInferenceMLPMixer(
+    cached_model = RecurrentInference(
         n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
         mixed_heads=False, combined_heads=False, decay=True, parallel_heads=False, use_projections=True, dropout_layer=True).float().to(device)
 
@@ -375,6 +375,7 @@ def test_recurrent_col_repeat_equivalence(trained_model=True):
         mixed_heads=False, combined_heads=False, decay=False, parallel_heads=False, use_projections=True, dropout_layer=True).float().to(device)
 
     generation_config = GenerationConfig()
+    model.load_state_dict(cached_model.state_dict())
     print (model)
     load_model(model, f"{checkpoint_root}/fineweb_h4_colrepeat_k1_1024_n16_c512_b32x4/checkpoint-200000/model.safetensors")
     load_model(cached_model, f"{checkpoint_root}/fineweb_h4_colrepeat_k1_1024_n16_c512_b32x4/checkpoint-200000/model.safetensors")

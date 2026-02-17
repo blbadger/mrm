@@ -250,7 +250,7 @@ class RowRepeatCausalLinear(nn.Module):
         else:
             M = torch.where(
                 j >= i, v[i], torch.zeros(m, m, device=v.device, dtype=v.dtype)
-            ); print (M)
+            )
         return M
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -668,7 +668,7 @@ class MixerBlock(nn.Module):
             elif kernel is not None and kernel > 1:
                 self.token_mixing_layer = KernelRepeatLinear(seq_len, kernel=kernel, decay=decay, decay_constant=seq_len//256)
             else:
-                self.token_mixing_layer = RowRepeatCausalLinear(seq_len) #TODO: revert to col
+                self.token_mixing_layer = RowRepeatCausalLinear(seq_len) 
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         res = x

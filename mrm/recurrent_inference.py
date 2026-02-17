@@ -47,6 +47,7 @@ class RowRepeatCausalLinear(nn.Module):
 
     def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
         # expects x in shape [B, E]
+        print (f"Index: {index}")
         decay_value = (torch.clip(self.decay_value, min=0.9, max=1)**(1/self.decay_constant)).to(x.device)
         out = self.weight[0, index]*x + decay_value*self.cache + self.bias[index]
         self.cache = out - self.bias[index]
@@ -330,7 +331,7 @@ class MixerBlock(nn.Module):
             elif kernel is not None and kernel > 1:
                 self.token_mixing_layer = KernelRepeatLinear(seq_len, kernel=kernel, decay=decay, decay_constant=seq_len//256)
             else:
-                self.token_mixing_layer = RowRepeatCausalLinear(seq_len, embedding_dim=hidden_dim) # TODO: add modular switch
+                self.token_mixing_layer = RowRepeatCausalLinear(seq_len, embedding_dim=hidden_dim) 
 
     def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
         res = x
