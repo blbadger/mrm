@@ -191,7 +191,7 @@ if __name__ == "__main__":
     n_heads = 4
     kernel = 1
 
-    model = InferenceMLPMixer(
+    model = RecurrentInference(
         n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
         mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True).float().to(device)
 
