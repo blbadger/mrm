@@ -93,6 +93,87 @@ class InferenceMLPMixer(CachedMLPMixer, GenerationMixin):
 		else:
 			return CausalLMOutput(loss=0, logits=logits)
 
+
+class RecurrentInference(CachedMLPMixer, GenerationMixin):
+
+	def __init__(
+		self,
+		vocab_size: int,
+		hidden_dim: int,
+		seq_len: int,
+		num_blocks: int,
+		heads=None,
+		kernel=1,
+		expanded_convs=False,
+		copy=False,        
+		mixed_heads=False,
+		combined_heads=False,
+		decay=False,
+		parallel_heads=False,
+		use_projections=True,
+		dropout_layer=False
+	):
+		super().__init__(vocab_size, hidden_dim, seq_len, num_blocks, heads=heads, kernel=kernel, expanded_convs=expanded_convs, copy=copy, 
+			mixed_heads=mixed_heads, combined_heads=combined_heads, decay=decay, parallel_heads=parallel_heads, use_projections=use_projections)
+
+		self._init_weights()
+		self.generation_config = GenerationConfig()
+		config  = {
+				 'hidden_size':hidden_dim,
+				 'intermediate_size': 4*hidden_dim,
+				 'num_hidden_layers': num_blocks,
+				 'num_attention_heads': 4,
+				 'vocab_size': vocab_size
+			 }
+		self.config = LlamaConfig(**config)
+		self.main_input_name = 'input_ids'
+		self._supports_cache_class = False
+		self.cache_built = False
+		self.device = self.output_layer.weight.device
+		if dropout_layer:
+			# overwrite original dropout layer with dropout included
+			for i in range(len(self.mixer_blocks)):
+				self.mixer_blocks[i].channel_mixing_layer = nn.Sequential(
+				nn.Linear(hidden_dim, hidden_dim * self.mixer_blocks[i].expansion_factor),
+				nn.SiLU(),
+				nn.Dropout(0.),
+				nn.Linear(hidden_dim * self.mixer_blocks[i].expansion_factor, hidden_dim),
+			)
+
+	def can_generate(self):
+		return True
+
+	def count_params(self):
+		return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+	def build_cache(self, input_ids):
+		for i in range(1, len(input_ids[0])):
+			x = self.input_layer(input_ids[:, :i])
+			for block in self.mixer_blocks:
+				x = block(x, i)
+		self.cache_built = True
+		return
+
+	def forward(self, input_ids, labels=None, **kwargs):
+		if not self.cache_built:
+			self.build_cache(input_ids)
+		index = input_ids.shape[1]
+		input_ids = input_ids[:, -1] # last token only
+		if labels is not None:
+			labels = labels[:, 1:].contiguous()
+		# model's forward pass
+		x = self.input_layer(input_ids)
+		for block in self.mixer_blocks:
+			x = block(x, index)
+		self.index += 1
+		logits = self.output_layer(x)
+		logits = logits[:, -1].unsqueeze(1).contiguous()
+		if labels is not None:
+			return CausalLMOutput(loss=0, logits=logits)
+		else:
+			return CausalLMOutput(loss=0, logits=logits)
+
+
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 if __name__ == "__main__":
