@@ -237,7 +237,7 @@ def test_mixed_row_col_decay_equivalence(trained_model=False):
     assert torch.equal(output_ids, cached_output_ids)
     return
 
-def testmixed_row_col_decay_scaling_equivalence():
+def test_mixed_row_col_decay_scaling_equivalence():
     load_dotenv()
     checkpoint_root = os.getenv('CHECKPOINT_ROOT')
     data_root = os.getenv('DATA_ROOT')
@@ -277,5 +277,3 @@ def testmixed_row_col_decay_scaling_equivalence():
 
 if __name__ == '__main__':
 	row_repeat_equivalence()
-	col_repeat_equivalence()
-	mixed_row_col_decay_equivalence()
