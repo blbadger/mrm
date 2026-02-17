@@ -56,7 +56,7 @@ class RowRepeatCausalLinear(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, E, S = x.shape
-        decay_value = (torch.clip(self.decay_value, min=0.9, max=1)**(1/decay_constant)).to(x.device)
+        decay_value = (torch.clip(self.decay_value, min=0.9, max=1)**(1/self.decay_constant)).to(x.device)
         self.cache = self.cache.to(x.device)
         x = x.reshape(B * E, S)  # (B*E, S)
         index = x.shape[-1] - 1
