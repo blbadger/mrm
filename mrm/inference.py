@@ -158,7 +158,7 @@ class RecurrentInference(RecurrentMLPMixer, GenerationMixin):
 	def forward(self, input_ids, labels=None, **kwargs):
 		if not self.cache_built:
 			self.build_cache(input_ids)
-		index = input_ids.shape[1] - 1; print (input_ids.shape, index)
+		index = input_ids.shape[1] - 1
 		input_ids = input_ids[:, -1] # last token only
 		
 		# model's forward pass

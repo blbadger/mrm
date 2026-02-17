@@ -499,8 +499,8 @@ def test_recurrent_parallel_mixed_row_col_decay_equivalence():
 
     output_ids = model.generate(input_ids, max_length=len(input_ids[0]) + 50, generation_config=generation_config)
     cached_output_ids = cached_model.generate(input_ids, max_length=len(input_ids[0]) + 50, generation_config=generation_config)
-    assert torch.equal(output_ids, cached_output_ids)
     print (f"Reference output: {tokenizer.decode(output_ids[0])} \n Cached Output: {tokenizer.decode(cached_output_ids[0])}")
+    assert torch.equal(output_ids, cached_output_ids)
     return
 
 if __name__ == '__main__':

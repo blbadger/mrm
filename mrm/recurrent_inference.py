@@ -47,7 +47,6 @@ class RowRepeatCausalLinear(nn.Module):
 
     def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
         # expects x in shape [B, E]
-        print (f"Index: {index}")
         decay_value = (torch.clip(self.decay_value, min=0.9, max=1)**(1/self.decay_constant)).to(x.device)
         out = self.weight[0, index]*x + decay_value*self.cache + self.bias[index]
         self.cache = out - self.bias[index]
@@ -74,7 +73,7 @@ class CombinedRepeatCausalLinear(nn.Module):
         x = x.reshape(B * E, S)  # (B*E, S)
         index = x.shape[-1]
         # row computation and cache update
-        row_out = self.weight[0, index]*x[..., index] + decay_value[0]*self.cache
+        row_out = self.weight[0, index]*x[..., index] + decay_value[0]*self.cache # note decay val
         self.row_cache = out
 
         # col computation and cache update
@@ -139,19 +138,22 @@ class HeadedRepeatCausalLinear(nn.Module):
 
     def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
         x = x.to(device) # x has shape [b * h, e]
-        x = rearrange(x, '(b h) e -> h b e', h=self.heads)
-        decay_value = (torch.clip(self.decay_value[1], min=0.9, max=1)**(1/self.decay_constant)).to(x.device)
+        x = rearrange(x, '(b h) e -> b e h', h=self.heads)
+        decay_value = (torch.clip(self.decay_value, min=0.9, max=1)**(1/self.decay_constant)).to(x.device)
+        self.cache = rearrange(self.cache, 'h d -> d h')
+        
         # row computation and cache update
-        row_out = self.weight[:self.heads//2, index]*x[:self.heads//2, :, index] + decay_value[0]*self.cache[:self.heads//2]
-        self.cache[:self.heads//2] = row_out
+        row_out = self.weight[self.heads//2:, index]*x[..., self.heads//2:] + decay_value[1]*self.cache[:, self.heads//2:]
+        self.cache[:, self.heads//2:] = row_out
 
         # col computation and cache update
-        col_out = self.weight[self.heads//2:, index]*x[self.heads//2:, :, index] + self.weight[self.heads//2:, index]*decay_value[1]*self.cache[self.heads//2:]
-        self.cache[self.heads//2:] = row_out / self.weight[self.heads//2:, index]
+        col_out = self.weight[:self.heads//2, index]*x[...,:self.heads//2] + self.weight[:self.heads//2, index]*decay_value[1]*self.cache[:, :self.heads//2]
+        self.cache[:, :self.heads//2] = col_out / self.weight[:self.heads//2, index]
         
-        output = torch.cat((row_out, col_out), dim=0)
+        self.cache = rearrange(self.cache, 'd h -> h d')
+        output = torch.cat((col_out, row_out), dim=-1)
         output += self.bias[:, index]
-        output = rearrange(output, 'h b e -> (b h) e', h=self.heads)
+        output = rearrange(output, 'b e h -> (b h) e', h=self.heads)
         return output
 
 class ParallelRepeatHeads(nn.Module):
@@ -175,15 +177,13 @@ class ParallelRepeatHeads(nn.Module):
         self.use_projections = use_projections
     
     def forward(self, x:torch.Tensor, index: int) -> torch.Tensor:
-        x = rearrange(x, "b e t -> b t e")
         if self.use_projections:
             x = self.in_proj(x)
-        projections = rearrange(x, "b t (h e) -> (b h) e t", h=self.n_heads)
-        conv_projection = self.mixer_heads(projections)
-        output = rearrange(conv_projection, "(b h) e t -> b t (h e)", h=self.n_heads)
+        projections = rearrange(x, "b (h e) -> (b h) e", h=self.n_heads)
+        conv_projection = self.mixer_heads(projections, index)
+        output = rearrange(conv_projection, "(b h) e -> b (h e)", h=self.n_heads)
         if self.use_projections:
             output = self.out_proj(output)
-        output = rearrange(output, "b t e -> b e t")
         return output
 
 class MixedRepeatHeads(nn.Module):
