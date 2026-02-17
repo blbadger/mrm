@@ -257,10 +257,10 @@ class RepeatHeads(nn.Module):
                     projection = projection.to(torch.float16)
 
             conv_projection = self.mixer_heads[head](projection, index)
-            activations.append(rearranged_conv)
+            activations.append(conv_projection)
 
         # concatenate and project multi-headed output
-        hidden_layer = torch.cat(activations, dim=2)
+        hidden_layer = torch.cat(activations, dim=1)
         if self.use_projections:
             hidden_layer = self.out_proj(hidden_layer)
         return hidden_layer
