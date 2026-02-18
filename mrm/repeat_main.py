@@ -788,28 +788,28 @@ if __name__ == "__main__":
     load_dotenv()
     checkpoint_root = os.getenv('CHECKPOINT_ROOT')
     data_root = os.getenv('DATA_ROOT')
-    tokenizer = AutoTokenizer.from_pretrained(f"{data_root}/tokenizer_fineweb_8k")
+    tokenizer = AutoTokenizer.from_pretrained(f"{data_root}/tokenizer_stack_8k")
     tokenizer.pad_token = tokenizer.eos_token
     n_vocab = len(tokenizer)
     print("Vocab size: ", n_vocab)
 
-    tokenized_length = 512
-    dim = 512
+    tokenized_length = 1024
+    dim = 1024
     layers = 16
     n_heads = 4
     kernel= 1
 
     model = MLPMixer(
-        n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, mixed_heads=False, combined_heads=False, decay=True, parallel_heads=False, use_projections=True)
+        n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True)
     count_parameters(model)
     #model = torch.compile(model)
     
     n_gpus = torch.cuda.device_count()
-    total_batch_size = 128 #  128
+    total_batch_size = 64 #  128
     batch_size = total_batch_size // n_gpus
-    train_path = f"{data_root}/fineweb-edu-tokenized-train-c512"
-    test_path = f"{data_root}/fineweb-edu-tokenized-test-c512"
-    output_dir = f"{checkpoint_root}/fineweb_h{n_heads}_decay_nonparallel_col_projs_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
+    train_path = f"{data_root}/stack-tokenized-train-c1024-8k"
+    test_path = f"{data_root}/stack-tokenized-test-c1024-8k"
+    output_dir = f"{checkpoint_root}/stack_h{n_heads}_mixed_decay_nonparallel_projs_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
   
     datasets.config.IN_MEMORY_MAX_SIZE = 1e9
     train_dataset = load_from_disk(train_path, keep_in_memory=None)

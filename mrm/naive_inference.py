@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 import shutil
 from repeat_main import MLPMixer
 from transformers import TextStreamer
+import time
 import warnings
 warnings.simplefilter(action='ignore', category=UserWarning)
 
@@ -131,7 +132,8 @@ if __name__ == "__main__":
     print (model)
     load_model(model, f"{checkpoint_root}/fineweb_h4_decay_mixedrepeat_k1_1024_n16_c512_b32x4/checkpoint-200000/model.safetensors")
     text = '''Four score and seven years ago, our'''
-    input_ids = torch.tensor(tokenizer.encode(text)[1:]).unsqueeze(0).to(device) # ignore bos token
+    input_ids = torch.tensor(tokenizer.encode(text)[1:]).repeat(10, 1).to(device) # ignore bos token
     print (input_ids)
-    output_ids = model.generate(input_ids, max_length=len(input_ids[0]) + 50, generation_config=generation_config, streamer=streamer)
-    print (tokenizer.decode(output_ids[0]))
+    start = time.time()
+    output_ids = model.generate(input_ids, max_length=len(input_ids[0]) + 50, generation_config=generation_config)
+    print (tokenizer.decode(output_ids[0]), time.time() - start)
