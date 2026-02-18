@@ -193,14 +193,14 @@ if __name__ == "__main__":
     model = RecurrentInference(
         n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
         mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True).float().to(device)
-
     generation_config = GenerationConfig()
     print (model)
     load_model(model, f"{checkpoint_root}/fineweb_h4_decay_mixedrepeat_k1_1024_n16_c512_b32x4/checkpoint-200000/model.safetensors")
+    model = torch.compile(model)
     text ='''Four score and seven years ago, our'''
-    input_ids = torch.tensor(tokenizer.encode(text)[1:]).repeat(10, 1 ).to(device) # ignore bos token
+    input_ids = torch.tensor(tokenizer.encode(text)[1:]).repeat(2000, 1).to(device) # ignore bos token
     print (input_ids.shape)
     streamer = TextStreamer(tokenizer, skip_prompt=False)
     start = time.time()
-    output_ids = model.generate(input_ids, max_length=len(input_ids[0]) + 50, generation_config=generation_config) #, streamer=streamer)
+    output_ids = model.generate(input_ids, max_length=len(input_ids[0]) + 500, generation_config=generation_config) #, streamer=streamer)
     print (tokenizer.decode(output_ids[0]), time.time() - start)
