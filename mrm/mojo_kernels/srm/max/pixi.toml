@@ -1,0 +1,15 @@
+[workspace]
+authors = ["Benjamin Badger <blbadger10@gmail.com>"]
+channels = ["https://conda.modular.com/max-nightly", "conda-forge"]
+name = "max"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+addition = "python3 addition.py"
+test_addition = "pytest test_addition.py"
+test = "python test.py"
+
+[dependencies]
+modular = ">=26.2.0.dev2026021805,<27"
+pytest = ">=9.0.2,<10"
