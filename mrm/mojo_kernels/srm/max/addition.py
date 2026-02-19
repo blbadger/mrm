@@ -18,12 +18,14 @@ from max import engine
 from max.driver import CPU
 from max.dtype import DType
 from max.graph import DeviceRef, Graph, TensorType, ops
-
+from max import driver
+from max.tensor import Tensor
+import torch
 
 def add_tensors(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     # 1. Build the graph
     input_type = TensorType(
-        dtype=DType.float32, shape=(1,), device=DeviceRef.CPU()
+        dtype=DType.float16, shape=(1,), device=driver.Accelerator()
     )
     with Graph(
         "simple_add_graph", input_types=(input_type, input_type)
@@ -34,7 +36,7 @@ def add_tensors(a: np.ndarray, b: np.ndarray) -> np.ndarray:
         print("final graph:", graph)
 
     # 2. Create an inference session
-    session = engine.InferenceSession([CPU()])
+    session = engine.InferenceSession([driver.Accelerator()])
     model = session.load(graph)
 
     for tensor in model.input_metadata:
@@ -44,13 +46,22 @@ def add_tensors(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
     # 3. Execute the graph
     output = model.execute(a, b)[0]
+    print (f"Output: {output}")
     result = output.to_numpy()
     return result
 
+def test_torch_tensor()
+    input_tensor = torch.tensor([1.0], dtype=torch.float16)
+    input0 = Tensor.constant(input_tensor, dtype=DType.float16, device=driver.CPU()).to(driver.Accelerator())
+    input1 = Tensor.constant([1.0], dtype=DType.float16, device=driver.CPU()).to(driver.Accelerator())
+    return input0, input1
 
 if __name__ == "__main__":
-    input0 = np.array([1.0], dtype=np.float32)
-    input1 = np.array([1.0], dtype=np.float32)
+    # external: take list, initialize as tensor on CPU, send to device
+    
+    input0, input1 = test_torch_tensor()
+    # input0 = Tensor.constant([1.0], dtype=DType.float32, device=driver.CPU()).to(driver.Accelerator())
+    # input1 = Tensor.constant([1.0], dtype=DType.float32, device=driver.CPU()).to(driver.Accelerator())
     result = add_tensors(input0, input1)
     print("result:", result)
     assert result == [2.0]
