@@ -50,7 +50,7 @@ def add_tensors(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     result = output.to_numpy()
     return result
 
-def test_torch_tensor()
+def test_torch_tensor():
     input_tensor = torch.tensor([1.0], dtype=torch.float16)
     input0 = Tensor.constant(input_tensor, dtype=DType.float16, device=driver.CPU()).to(driver.Accelerator())
     input1 = Tensor.constant([1.0], dtype=DType.float16, device=driver.CPU()).to(driver.Accelerator())

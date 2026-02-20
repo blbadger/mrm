@@ -10,7 +10,14 @@ from max.tensor import Tensor, TensorType, defaults
 import max.functional as F
 import max
 import torch
+from transformers import AutoTokenizer
 
+import os 
+from dotenv import load_dotenv
+import pathlib
+load_dotenv()
+checkpoint_root = os.getenv('CHECKPOINT_ROOT')
+data_root = os.getenv('DATA_ROOT')
 
 class ColRepeatCausalLinear(nn.Module):
 
@@ -124,12 +131,19 @@ class ParallelRepeatHeads(nn.Module):
         batch_dim = x.shape[0]
         if self.use_projections:
             x = self.in_proj(x)
-        projections = x.reshape(batch_dim * self.n_heads, self.) # rearrange(x, "b (h e) -> (b h) e", h=self.n_heads)
+        projections = x.reshape(batch_dim * self.n_heads, self.head_dim) # rearrange(x, "b (h e) -> (b h) e", h=self.n_heads)
         conv_projection = self.mixer_heads(projections, index, head_dim=hidden_dim)
         output = conv_projection.reshape(batch_dim, n_heads * self.head_dim) # rearrange(conv_projection, "(b h) e -> b (h e)", h=self.n_heads)
         if self.use_projections:
             output = self.out_proj(output)
         return output
+
+    def __call__(self, x: TensorValue, index: int) -> TensorValue:
+        return self.forward(x, index)
+
+    def __repr__(self) -> str:
+        return f"Multi-Headed (h={self.heads}) Parallel Repeat Causal Linear Layer, mixing up to {dim} tokens with {embedding_dim} hidden dimension with decay={decay}"
+
 
 class MixedRepeatHeads(nn.Module):
 
@@ -162,6 +176,13 @@ class MixedRepeatHeads(nn.Module):
             hidden_layer = self.out_proj(hidden_layer)
 
         return hidden_layer
+
+    def __call__(self, x: TensorValue, index: int) -> TensorValue:
+        return self.forward(x, index)
+
+    def __repr__(self) -> str:
+        return f"Multi-Headed (h={self.heads}) Parallel Repeat Causal Linear Layer, mixing up to {dim} tokens with {embedding_dim} hidden dimension with decay={decay}"
+
 
 class RepeatHeads(nn.Module):
 
@@ -196,6 +217,12 @@ class RepeatHeads(nn.Module):
         if self.use_projections:
             hidden_layer = self.out_proj(hidden_layer)
         return hidden_layer
+
+    def __call__(self, x: TensorValue, index: int) -> TensorValue:
+        return self.forward(x, index)
+
+    def __repr__(self) -> str:
+        return f"Multi-Headed (h={self.heads}) Parallel Repeat Causal Linear Layer, mixing up to {dim} tokens with {embedding_dim} hidden dimension with decay={decay}"
 
 
 class MixerBlock(nn.Module):
@@ -251,7 +278,7 @@ class MixerBlock(nn.Module):
                 )  
 
         else:
-            elif kernel is not None and kernel > 1:
+            if kernel is not None and kernel > 1:
                 self.token_mixing_layer = KernelRepeatLinear(seq_len, kernel=kernel, decay=decay, decay_constant=seq_len//256)
             else:
                 self.token_mixing_layer = RowRepeatCausalLinear(seq_len, embedding_dim=hidden_dim) 
@@ -268,8 +295,14 @@ class MixerBlock(nn.Module):
         x = x + res
         return x
 
+    def __call__(self, x: TensorValue, index: int) -> TensorValue:
+        return self.forward(x, index)
 
-class RecurrentMLPMixer(nn.Module):
+    def __repr__(self) -> str:
+        return f"Multi-Headed (h={self.heads}) Parallel Repeat Causal Linear Layer, mixing up to {dim} tokens with {embedding_dim} hidden dimension with decay={decay}"
+
+
+class RecurrentSRM(nn.Module):
 
     def __init__(
         self,
@@ -291,7 +324,7 @@ class RecurrentMLPMixer(nn.Module):
         self.hidden_dim = hidden_dim
         self.seq_len = seq_len
         self.num_blocks = num_blocks
-        self.input_layer = nn.Embedding(vocab_size=vocab_size, dim=hidden_dim)
+        self.input_layer = nn.Embedding(vocab_size=vocab_size, hidden_dim=hidden_dim, dtype=Dtype.float16, device=DeviceRef.accelerator)
 
         self.mixer_blocks = [MixerBlock(
             hidden_dim, seq_len, heads=heads, mixed_heads=mixed_heads, decay=decay, parallel_heads=parallel_heads, use_projections=use_projections
@@ -304,6 +337,13 @@ class RecurrentMLPMixer(nn.Module):
             x = block(x, index)
         logits = self.output_layer(x)
         return logits
+
+    def __call__(self, x: TensorValue, index: int) -> TensorValue:
+        return self.forward(x, index)
+
+    def __repr__(self) -> str:
+        return f"Multi-Headed (h={self.heads}) Parallel Repeat Causal Linear Layer, mixing up to {dim} tokens with {embedding_dim} hidden dimension with decay={decay}"
+
 
 
 if __name__ == "__main__":
@@ -324,7 +364,7 @@ if __name__ == "__main__":
     n_heads = 4
     kernel= 1
 
-    model = MLPMixer(
+    model = RecurrentSRM(
         n_vocab, 
         dim, 
         tokenized_length, 
@@ -332,7 +372,6 @@ if __name__ == "__main__":
         heads=n_heads, 
         copy=False, 
         mixed_heads=True, 
-        combined_heads=False,
         decay=True, 
         parallel_heads=False, 
         use_projections=True
@@ -342,5 +381,5 @@ if __name__ == "__main__":
     input_type = TensorType(DType.int, [input_tokens.shape[0], input_tokens.shap[e[1]]])
     input_tensor = Tensor.constant(input_tokens, dtype=DType.int, device=driver.CPU()).to(driver.Accelerator())
     compiled_model = model.compile(input_type)
-    output = compiled_model(input_tokens)
+    output = compiled_model(input_tokens, len_input_tokens[0])
    
