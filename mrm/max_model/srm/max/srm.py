@@ -29,6 +29,7 @@ class ColRepeatCausalLinear(nn.Module):
         self.weight = Tensor.zeros( [1, dim]) # init to randn
         self.bias = Tensor.zeros([dim]) # init to zero
         self.decay_value = Tensor.ones([1])
+        self.decay_constant = decay_constant
         self.cache = torch.zeros([embedding_dim]) # TODO: initialize and send to shared mem via custom op
 
     def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
@@ -51,6 +52,7 @@ class RowRepeatCausalLinear(nn.Module):
         self.weight = Tensor.ones([1, dim]) # init to randn
         self.bias = Tensor.zeros([dim]) # init to zero
         self.decay_value = Tensor.ones([1])
+        self.decay_constant = decay_constant
         self.cache = torch.zeros([embedding_dim]) # TODO: initialize and send to shared mem via custom op
 
     def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
@@ -226,6 +228,17 @@ class RepeatHeads(nn.Module):
     def __repr__(self) -> str:
         return f"Multi-Headed (h={self.heads}) Parallel Repeat Causal Linear Layer, mixing up to {dim} tokens with {embedding_dim} hidden dimension with decay={decay}"
 
+class LayerNorm(nn.Module):
+
+    def __init__(self, dim: DimLike, *, eps: float = 1e-5) -> None:
+        super().__init__()
+        self.eps = eps
+        self.weight = Tensor.ones([dim])
+        self.bias = Tensor.zeros([dim])
+
+    def forward(self, x: Tensor) -> Tensor:
+        return F.layer_norm(x, gamma=self.weight, beta=self.bias, epsilon=self.eps)
+
 
 class MixerBlock(nn.Module):
 
@@ -237,8 +250,8 @@ class MixerBlock(nn.Module):
         self.expansion_factor = expansion_factor
 
         # TODO: check norm, might have to implement if off basis
-        self.channel_norm = max.nn.legacy.norm.LayerNorm(hidden_dim, devices=[device], dtype=DType.float16)
-        self.token_norm = max.nn.legacy.norm.LayerNorm(hidden_dim, devices=[device], dtype=DType.float16) 
+        self.channel_norm = LayerNorm(hidden_dim)
+        self.token_norm = LayerNorm(hidden_dim)
 
         # channel-mixing layer
         self.channel_in = max.nn.Linear(hidden_dim, hidden_dim * expansion_factor)
@@ -282,7 +295,7 @@ class MixerBlock(nn.Module):
             else:
                 self.token_mixing_layer = RowRepeatCausalLinear(seq_len, embedding_dim=hidden_dim) 
 
-    def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
+    def forward(self, x: Tensor, index: int) -> torch.Tensor:
         res = x
         x = self.channel_norm(x)
         x = self.channel_in(x)
@@ -361,7 +374,7 @@ if __name__ == "__main__":
     input_tokens = tokenizer(input_string, return_tensors='pt').input_ids[:, 1:]
     length = Tensor.constant(input_tokens.shape[1])
 
-    tokenized_length = 64
+    tokenized_length = 512
     dim = 64
     layers = 2
     n_heads = 4
