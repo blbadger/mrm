@@ -11,6 +11,7 @@ test_addition = "pytest test_addition.py"
 test = "python test.py"
 module_test = "python module_test.py"
 srm_test = "python srm.py"
+embedding_test = "python embedding_test.py"
 
 [dependencies]
 modular = ">=26.2.0.dev2026021805,<27"

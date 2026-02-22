@@ -25,7 +25,7 @@ import torch
 def add_tensors(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     # 1. Build the graph
     input_type = TensorType(
-        dtype=DType.float16, shape=(1,), device=driver.Accelerator()
+        dtype=DType.float16, shape=(1,), device=driver.CPU()
     )
     with Graph(
         "simple_add_graph", input_types=(input_type, input_type)
@@ -36,7 +36,7 @@ def add_tensors(a: np.ndarray, b: np.ndarray) -> np.ndarray:
         print("final graph:", graph)
 
     # 2. Create an inference session
-    session = engine.InferenceSession([driver.Accelerator()])
+    session = engine.InferenceSession([driver.CPU()])
     model = session.load(graph)
 
     for tensor in model.input_metadata:
@@ -59,9 +59,9 @@ def test_torch_tensor():
 if __name__ == "__main__":
     # external: take list, initialize as tensor on CPU, send to device
     
-    input0, input1 = test_torch_tensor()
-    # input0 = Tensor.constant([1.0], dtype=DType.float32, device=driver.CPU()).to(driver.Accelerator())
-    # input1 = Tensor.constant([1.0], dtype=DType.float32, device=driver.CPU()).to(driver.Accelerator())
+    #input0, input1 = test_torch_tensor()
+    input0 = Tensor.constant([1.0], dtype=DType.float32, device=driver.CPU())
+    input1 = Tensor.constant([1.0], dtype=DType.float32, device=driver.CPU())
     result = add_tensors(input0, input1)
     print("result:", result)
     assert result == [2.0]

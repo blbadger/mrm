@@ -5,16 +5,18 @@ from typing import Any
 
 from max.dtype import DType
 from max.graph import DeviceRef, TensorValue, ops
-from max.nn import legacy as nn
 from max.tensor import Tensor, TensorType, defaults
 import max.functional as F
 import max
+import max.nn as nn
+from max import driver
 import torch
 from transformers import AutoTokenizer
 
 import os 
 from dotenv import load_dotenv
 import pathlib
+
 load_dotenv()
 checkpoint_root = os.getenv('CHECKPOINT_ROOT')
 data_root = os.getenv('DATA_ROOT')
@@ -46,7 +48,7 @@ class RowRepeatCausalLinear(nn.Module):
     def __init__(self, dim: int, embedding_dim=256, decay=False, decay_constant=1, **args):
         super().__init__()
         # Standard weight + bias
-        self.weight = Tensor([1, dim]) # init to randn
+        self.weight = Tensor.ones([1, dim]) # init to randn
         self.bias = Tensor.zeros([dim]) # init to zero
         self.decay_value = Tensor.ones([1])
         self.cache = torch.zeros([embedding_dim]) # TODO: initialize and send to shared mem via custom op
@@ -74,7 +76,7 @@ class HeadedRepeatCausalLinear(nn.Module):
         super().__init__()
 
         # Standard weight + bias
-        self.weight = Tensor([heads, dim])
+        self.weight = Tensor.ones([heads, dim])
         self.bias = Tensor.zeros([heads, dim])
         self.heads = heads
         self.decay_value = Tensor.ones([2, 1]) # N.B. only one value used, for back compatability
@@ -121,8 +123,8 @@ class ParallelRepeatHeads(nn.Module):
         # note that the hidden dim is by definition dim // n_heads
         super().__init__()
         self.n_heads = n_heads
-        self.in_proj = nn.Linear(dim, dim)
-        self.out_proj = nn.Linear(dim, dim)
+        self.in_proj = max.nn.Linear(dim, dim)
+        self.out_proj = max.nn.Linear(dim, dim)
         self.mixer_heads = HeadedRepeatCausalLinear(seq_len, n_heads, decay=decay, decay_constant=seq_len//512)
         self.use_projections = use_projections
         self.head_dim = head_dim
@@ -152,8 +154,8 @@ class MixedRepeatHeads(nn.Module):
         self.n_heads = n_heads
         self.use_projections = use_projections
         if use_projections:
-            self.proj_head = [nn.Linear(dim, hidden_dim) for i in range(n_heads)]
-            self.out_proj = nn.Linear(dim, dim)
+            self.proj_head = [max.nn.Linear(dim, hidden_dim) for i in range(n_heads)]
+            self.out_proj = max.nn.Linear(dim, dim)
 
         self.hidden_dim = hidden_dim
         self.mixer_heads = [ColRepeatCausalLinear(seq_len, embedding_dim=hidden_dim, decay=decay, decay_constant=seq_len//512) for i in range(n_heads//2)] \
@@ -192,8 +194,8 @@ class RepeatHeads(nn.Module):
         self.use_projections = use_projections
         self.hidden_dim = hidden_dim
         if self.use_projections:
-            self.proj_head = [nn.Linear(dim, hidden_dim) for i in range(n_heads)]
-            self.out_proj = nn.Linear(dim, dim)
+            self.proj_head = [max.nn.Linear(dim, hidden_dim) for i in range(n_heads)]
+            self.out_proj = max.nn.Linear(dim, dim)
 
         if combined_heads:
             self.mixer_heads = [CombinedRepeatCausalLinear(seq_len, decay=decay, decay_constant=seq_len//512) for i in range(n_heads)]
@@ -234,16 +236,13 @@ class MixerBlock(nn.Module):
         self.seq_len = seq_len
         self.expansion_factor = expansion_factor
 
-        # TODO: check norm
-        self.channel_norm = nn.norm.LayerNorm(-1)
-        self.token_norm = nn.norm.LayerNorm(-1) 
+        # TODO: check norm, might have to implement if off basis
+        self.channel_norm = max.nn.legacy.norm.LayerNorm(hidden_dim, devices=[device], dtype=DType.float16)
+        self.token_norm = max.nn.legacy.norm.LayerNorm(hidden_dim, devices=[device], dtype=DType.float16) 
 
         # channel-mixing layer
-        self.channel_mixing_layer = max.nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim * expansion_factor),
-            max.graph.ops.SiLU(),
-            nn.Linear(hidden_dim * expansion_factor, hidden_dim),
-        )
+        self.channel_in = max.nn.Linear(hidden_dim, hidden_dim * expansion_factor)
+        self.channel_out = max.nn.Linear(hidden_dim * expansion_factor, hidden_dim)
 
         if heads is not None and heads > 0:
             if parallel_heads:
@@ -286,7 +285,9 @@ class MixerBlock(nn.Module):
     def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
         res = x
         x = self.channel_norm(x)
-        x = self.channel_mixing_layer(x)
+        x = self.channel_in(x)
+        x = max.graph.ops.silu(x)
+        x = self.channel_out(x)
         x = x + res
 
         res = x
@@ -324,15 +325,16 @@ class RecurrentSRM(nn.Module):
         self.hidden_dim = hidden_dim
         self.seq_len = seq_len
         self.num_blocks = num_blocks
-        self.input_layer = nn.Embedding(vocab_size=vocab_size, hidden_dim=hidden_dim, dtype=Dtype.float16, device=DeviceRef.accelerator)
+        self.input_layer = max.nn.Embedding(vocab_size=vocab_size, dim=hidden_dim)
 
         self.mixer_blocks = [MixerBlock(
             hidden_dim, seq_len, heads=heads, mixed_heads=mixed_heads, decay=decay, parallel_heads=parallel_heads, use_projections=use_projections
         ) for _ in range(num_blocks)]
-        self.output_layer = nn.Linear(hidden_dim, vocab_size, bias=False)
+        self.output_layer = max.nn.Linear(hidden_dim, vocab_size, bias=False)
 
     def forward(self, input_ids, index: int, **kwargs):
         x = self.input_layer(input_ids)
+        index = index[0]
         for block in self.mixer_blocks:
             x = block(x, index)
         logits = self.output_layer(x)
@@ -344,7 +346,7 @@ class RecurrentSRM(nn.Module):
     def __repr__(self) -> str:
         return f"Multi-Headed (h={self.heads}) Parallel Repeat Causal Linear Layer, mixing up to {dim} tokens with {embedding_dim} hidden dimension with decay={decay}"
 
-
+device = driver.CPU()
 
 if __name__ == "__main__":
     load_dotenv()
@@ -352,15 +354,16 @@ if __name__ == "__main__":
     data_root = os.getenv('DATA_ROOT')
     tokenizer = AutoTokenizer.from_pretrained(f"{data_root}/tokenizer_fineweb_8k")
     tokenizer.pad_token = tokenizer.eos_token
-    n_vocab = len(tokenizer)
+    n_vocab =  len(tokenizer)
     print("Vocab size: ", n_vocab)
 
     input_string = 'Four score and seven years ago, our'
-    input_tokens = tokenizer(input_string, return_tensors='pt')
+    input_tokens = tokenizer(input_string, return_tensors='pt').input_ids[:, 1:]
+    length = Tensor.constant(input_tokens.shape[1])
 
-    tokenized_length = 512
-    dim = 1024
-    layers = 16
+    tokenized_length = 64
+    dim = 64
+    layers = 2
     n_heads = 4
     kernel= 1
 
@@ -377,9 +380,23 @@ if __name__ == "__main__":
         use_projections=True
     )
 
-    model.load_state_dict(open(f"{checkpoint_root}/fineweb_h4_decay_mixedrepeat_k1_1024_n16_c512_b32x4/checkpoint-200000/model.safetensors"))
-    input_type = TensorType(DType.int, [input_tokens.shape[0], input_tokens.shap[e[1]]])
-    input_tensor = Tensor.constant(input_tokens, dtype=DType.int, device=driver.CPU()).to(driver.Accelerator())
-    compiled_model = model.compile(input_type)
+    # weight_path = f"{checkpoint_root}/..."
+    # trained_weights = safe_open(weight_path)
+    # model.load_state_dict(trained_weights)
+    token_type = TensorType(
+        DType.int64, ("batch", "seqlen"), device=DeviceRef.from_device(device)
+    )
+
+    length_type = TensorType(
+        DType.int64, ("seqlen"), device=DeviceRef.from_device(device)
+    )
+
+    input_tensor = Tensor.constant(input_tokens, dtype=DType.int64, device=device)
+
+    # embedding test
+    # embedding = max.nn.Embedding(vocab_size=8000, dim=128)
+    # tokens = Tensor.constant(input_tokens, dtype=DType.int64)
+    # embedding = embedding(tokens)
+    compiled_model = model.compile(token_type, length_type)
     output = compiled_model(input_tokens, len_input_tokens[0])
    
