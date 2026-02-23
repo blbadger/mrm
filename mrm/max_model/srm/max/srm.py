@@ -26,7 +26,7 @@ class ColRepeatCausalLinear(nn.Module):
     def __init__(self, dim: int, embedding_dim=256, decay=False, decay_constant=1, **args):
         super().__init__()
         # Standard weight + bias
-        self.weight = Tensor.zeros( [1, dim]) # init to randn
+        self.weight = Tensor.zeros([1, dim]) # init to randn
         self.bias = Tensor.zeros([dim]) # init to zero
         self.decay_value = Tensor.ones([1])
         self.decay_constant = decay_constant
@@ -372,7 +372,7 @@ if __name__ == "__main__":
 
     input_string = 'Four score and seven years ago, our'
     input_tokens = tokenizer(input_string, return_tensors='pt').input_ids[:, 1:]
-    length = Tensor.constant(input_tokens.shape[1])
+    length = int(input_tokens.shape[1])
 
     tokenized_length = 512
     dim = 64
@@ -397,12 +397,13 @@ if __name__ == "__main__":
     # trained_weights = safe_open(weight_path)
     # model.load_state_dict(trained_weights)
     token_type = TensorType(
-        DType.int64, ("batch", "seqlen"), device=DeviceRef.from_device(device)
+        DType.int64, shape=[tokenized_length], device=DeviceRef.from_device(device)
     )
 
     length_type = TensorType(
-        DType.int64, ("seqlen"), device=DeviceRef.from_device(device)
+        DType.int64, shape=[1], device=DeviceRef.from_device(device)
     )
+    print (length_type)
 
     input_tensor = Tensor.constant(input_tokens, dtype=DType.int64, device=device)
 
@@ -411,5 +412,6 @@ if __name__ == "__main__":
     # tokens = Tensor.constant(input_tokens, dtype=DType.int64)
     # embedding = embedding(tokens)
     compiled_model = model.compile(token_type, length_type)
-    output = compiled_model(input_tokens, len_input_tokens[0])
+    output = compiled_model(input_tokens, length)
+    print (output)
    
