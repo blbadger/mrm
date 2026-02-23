@@ -16,6 +16,7 @@ from transformers import AutoTokenizer
 import os 
 from dotenv import load_dotenv
 import pathlib
+import time
 
 load_dotenv()
 checkpoint_root = os.getenv('CHECKPOINT_ROOT')
@@ -339,7 +340,7 @@ class RecurrentSRM(nn.Module):
         self.hidden_dim = hidden_dim
         self.seq_len = seq_len
         self.num_blocks = num_blocks
-        self.input_layer = max.nn.Embedding(vocab_size=vocab_size, dim=hidden_dim)
+        self.input_layer = max.nn.Embedding(vocab_size, dim=hidden_dim)
 
         self.mixer_blocks = [MixerBlock(
             hidden_dim, seq_len, heads=heads, mixed_heads=mixed_heads, decay=decay, parallel_heads=parallel_heads, use_projections=use_projections
@@ -415,8 +416,9 @@ if __name__ == "__main__":
     length = Tensor.constant(length, dtype=DType.int64, device=device)
     compiled_model = model.compile(token_type, length_type)
 
+    start = time.time()
     print ('Model compilation completed')
     output = model(input_tensor, length).to(device)
-    print ('Model forward pass completed')
-    print (output)
+    print (f'Model forward pass completed in {time.time() - start} seconds')
+    print (output.shape)
    
