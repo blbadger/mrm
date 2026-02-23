@@ -24,7 +24,7 @@ if __name__ == "__main__":
     tokenizer.pad_token = tokenizer.eos_token
     n_vocab = tokenizer.vocab_size
 
-    tokenized_length = 512
+    tokenized_length = 2048
     dim = 512
     layers = 16
     n_heads = 8
@@ -40,11 +40,13 @@ if __name__ == "__main__":
     config = LlamaConfig(**llama_config_kwargs)
     model = LlamaForCausalLM(config).float().to(device)
     print (model)
-    load_model(model, f"{checkpoint_root}/fineweb_training/fineweb_llama_512_n16_h8_c512/checkpoint-200000/model.safetensors")
+    #load_model(model, f"{checkpoint_root}/fineweb_training/fineweb_llama_512_c1024/checkpoint-196000/model.safetensors")
     generation_config = GenerationConfig()
     text ='''Four score and seven years ago, our'''
-    input_ids = torch.tensor(tokenizer.encode(text)[1:]).repeat(50, 1 ).to(device) # ignore bos token
+    tokens_to_generate = 2000
+    batch_size = 50
+    input_ids = torch.tensor(tokenizer.encode(text)[1:]).repeat(batch_size, 1 ).to(device) # ignore bos token
     print (input_ids.shape)
     start = time.time()
-    output_ids = model.generate(input_ids, max_length=len(input_ids[0]) + 500, generation_config=generation_config) #, streamer=streamer)
-    print (tokenizer.decode(output_ids[0]), time.time() - start)
+    output_ids = model.generate(input_ids, max_length=len(input_ids[0]) + tokens_to_generate, generation_config=generation_config) #, streamer=streamer)
+    print (f'Output example: {tokenizer.decode(output_ids[0])}, Elapsed time: {time.time() - start}, t/s: {(batch_size * tokens_to_generate)/(time.time() - start)}')

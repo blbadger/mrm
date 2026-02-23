@@ -788,12 +788,12 @@ if __name__ == "__main__":
     load_dotenv()
     checkpoint_root = os.getenv('CHECKPOINT_ROOT')
     data_root = os.getenv('DATA_ROOT')
-    tokenizer = AutoTokenizer.from_pretrained(f"{data_root}/tokenizer_stack_8k")
+    tokenizer = AutoTokenizer.from_pretrained(f"{data_root}/tokenizer_fineweb_8k")
     tokenizer.pad_token = tokenizer.eos_token
     n_vocab = len(tokenizer)
     print("Vocab size: ", n_vocab)
 
-    tokenized_length = 1024
+    tokenized_length = 512
     dim = 1024
     layers = 16
     n_heads = 4
@@ -805,11 +805,11 @@ if __name__ == "__main__":
     #model = torch.compile(model)
     
     n_gpus = torch.cuda.device_count()
-    total_batch_size = 64 #  128
+    total_batch_size = 128 #  128
     batch_size = total_batch_size // n_gpus
-    train_path = f"{data_root}/stack-tokenized-train-c1024-8k"
-    test_path = f"{data_root}/stack-tokenized-test-c1024-8k"
-    output_dir = f"{checkpoint_root}/stack_h{n_heads}_mixed_decay_nonparallel_projs_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
+    train_path = f"{data_root}/finemath-4-tokenized-train-c512-8k"
+    test_path = f"{data_root}/finemath-4-tokenized-test-c512-8k"
+    output_dir = f"{checkpoint_root}/finemath_h{n_heads}_mixed_decay_nonparallel_projs_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
   
     datasets.config.IN_MEMORY_MAX_SIZE = 1e9
     train_dataset = load_from_disk(train_path, keep_in_memory=None)
