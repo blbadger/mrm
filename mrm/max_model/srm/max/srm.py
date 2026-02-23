@@ -175,7 +175,7 @@ class MixedRepeatHeads(nn.Module):
             activations.append(conv_projection)
 
         # concatenate and project multi-headed output
-        hidden_layer = F.concat(activations, axis=1)
+        hidden_layer = F.concat(activations, axis=1) # [b e]
         if self.use_projections:
             hidden_layer = self.out_proj(hidden_layer)
 
@@ -346,6 +346,7 @@ class RecurrentSRM(nn.Module):
         self.output_layer = max.nn.Linear(hidden_dim, vocab_size, bias=False)
 
     def forward(self, input_ids, index: int, **kwargs):
+        input_ids = input_ids[:, -1]
         x = self.input_layer(input_ids)
         index = index[0]
         for block in self.mixer_blocks:
@@ -371,8 +372,10 @@ if __name__ == "__main__":
     print("Vocab size: ", n_vocab)
 
     input_string = 'Four score and seven years ago, our'
-    input_tokens = tokenizer(input_string, return_tensors='pt').input_ids[:, 1:]
+    input_tokens = tokenizer(input_string, return_tensors='pt').input_ids[:, 1:] # no BOS token
+    input_tokens = input_tokens.repeat(2, 1)
     length = int(input_tokens.shape[1])
+    print (input_tokens, length)
 
     tokenized_length = 512
     dim = 64
@@ -397,21 +400,16 @@ if __name__ == "__main__":
     # trained_weights = safe_open(weight_path)
     # model.load_state_dict(trained_weights)
     token_type = TensorType(
-        DType.int64, shape=[tokenized_length], device=DeviceRef.from_device(device)
+        DType.int64, shape=[input_tokens.shape[0], tokenized_length], device=DeviceRef.from_device(device)
     )
 
     length_type = TensorType(
         DType.int64, shape=[1], device=DeviceRef.from_device(device)
     )
-    print (length_type)
+    print (length_type, token_type)
 
     input_tensor = Tensor.constant(input_tokens, dtype=DType.int64, device=device)
-
-    # embedding test
-    # embedding = max.nn.Embedding(vocab_size=8000, dim=128)
-    # tokens = Tensor.constant(input_tokens, dtype=DType.int64)
-    # embedding = embedding(tokens)
     compiled_model = model.compile(token_type, length_type)
-    output = compiled_model(input_tokens, length)
+    output = compiled_model(input_tensor, length)
     print (output)
    
