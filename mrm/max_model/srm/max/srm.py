@@ -241,6 +241,11 @@ class LayerNorm(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         return F.layer_norm(x, gamma=self.weight, beta=self.bias, epsilon=self.eps)
 
+    def __call__(self, x: TensorValue) -> TensorValue:
+        return self.forward(x)
+
+    def __repr__(self) -> str:
+        return f"Multi-Headed (h={self.heads}) Parallel Repeat Causal Linear Layer, mixing up to {dim} tokens with {embedding_dim} hidden dimension with decay={decay}"
 
 class MixerBlock(nn.Module):
 
@@ -299,12 +304,16 @@ class MixerBlock(nn.Module):
 
     def forward(self, x: Tensor, index: int) -> torch.Tensor:
         res = x
+        print ('res')
         x = self.channel_norm(x)
+        print ('prein')
         x = self.channel_in(x)
+        print ('prenorm')
         x = F.silu(x)
         x = self.channel_out(x)
         x = x + res
 
+        print ('midway through block')
         res = x
         x = self.token_norm(x)
         x = self.token_mixing_layer(x, index)
@@ -352,8 +361,8 @@ class RecurrentSRM(nn.Module):
         input_ids = input_ids[:, -1]
         x = self.input_layer(input_ids)
         # index = index[0]
-        for block in self.mixer_blocks:
-            x = block(x, index)
+        for i, block in enumerate(self.mixer_blocks):
+            print (i);x = block(x, index)
         
         logits = self.output_layer(x)
         print ('model forward pass ended')
@@ -376,9 +385,9 @@ if __name__ == "__main__":
     n_vocab =  len(tokenizer)
 
     input_string = 'Four score and seven years ago, our'
-    input_tokens = tokenizer(input_string, return_tensors='pt').input_ids[:, 1:] # no BOS token
+    input_tokens = tokenizer(input_string, return_tensors='pt').input_ids[:, 1].unsqueeze(1) # no BOS token
     input_tokens = input_tokens.repeat(2, 1)
-    length = input_tokens.shape[1]
+    length = torch.tensor([input_tokens.shape[1]])
     print (input_tokens, length)
 
     tokenized_length = 512
@@ -404,7 +413,7 @@ if __name__ == "__main__":
     # trained_weights = safe_open(weight_path)
     # model.load_state_dict(trained_weights)
     token_type = TensorType(
-        DType.int64, shape=[input_tokens.shape[0], tokenized_length], device=DeviceRef.from_device(device)
+        DType.int64, shape=[input_tokens.shape[0], 1], device=DeviceRef.from_device(device)
     )
 
     length_type = TensorType(
@@ -418,7 +427,7 @@ if __name__ == "__main__":
 
     start = time.time()
     print ('Model compilation completed')
-    output = model(input_tensor, length).to(device)
+    output = compiled_model(input_tensor.to(device), length.to(device)).to(device)
     print (f'Model forward pass completed in {time.time() - start} seconds')
     print (output.shape)
    
