@@ -21,6 +21,7 @@ load_dotenv()
 checkpoint_root = os.getenv('CHECKPOINT_ROOT')
 data_root = os.getenv('DATA_ROOT')
 
+
 class ColRepeatCausalLinear(nn.Module):
 
     def __init__(self, dim: int, embedding_dim=256, decay=False, decay_constant=1, **args):
@@ -299,7 +300,7 @@ class MixerBlock(nn.Module):
         res = x
         x = self.channel_norm(x)
         x = self.channel_in(x)
-        x = max.graph.ops.silu(x)
+        x = F.silu(x)
         x = self.channel_out(x)
         x = x + res
 
@@ -346,19 +347,22 @@ class RecurrentSRM(nn.Module):
         self.output_layer = max.nn.Linear(hidden_dim, vocab_size, bias=False)
 
     def forward(self, input_ids, index: int, **kwargs):
+        print ('model forward pass started')
         input_ids = input_ids[:, -1]
         x = self.input_layer(input_ids)
-        index = index[0]
+        # index = index[0]
         for block in self.mixer_blocks:
             x = block(x, index)
+        
         logits = self.output_layer(x)
+        print ('model forward pass ended')
         return logits
 
     def __call__(self, x: TensorValue, index: int) -> TensorValue:
         return self.forward(x, index)
 
     def __repr__(self) -> str:
-        return f"Multi-Headed (h={self.heads}) Parallel Repeat Causal Linear Layer, mixing up to {dim} tokens with {embedding_dim} hidden dimension with decay={decay}"
+        return f"Structured Recurrent Mixer Model"
 
 device = driver.CPU()
 
@@ -369,12 +373,11 @@ if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained(f"{data_root}/tokenizer_fineweb_8k")
     tokenizer.pad_token = tokenizer.eos_token
     n_vocab =  len(tokenizer)
-    print("Vocab size: ", n_vocab)
 
     input_string = 'Four score and seven years ago, our'
     input_tokens = tokenizer(input_string, return_tensors='pt').input_ids[:, 1:] # no BOS token
     input_tokens = input_tokens.repeat(2, 1)
-    length = int(input_tokens.shape[1])
+    length = input_tokens.shape[1]
     print (input_tokens, length)
 
     tokenized_length = 512
@@ -409,7 +412,11 @@ if __name__ == "__main__":
     print (length_type, token_type)
 
     input_tensor = Tensor.constant(input_tokens, dtype=DType.int64, device=device)
+    length = Tensor.constant(length, dtype=DType.int64, device=device)
     compiled_model = model.compile(token_type, length_type)
-    output = compiled_model(input_tensor, length)
+
+    print ('Model compilation completed')
+    output = model(input_tensor, length).to(device)
+    print ('Model forward pass completed')
     print (output)
    
