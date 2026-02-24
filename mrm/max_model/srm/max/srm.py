@@ -10,6 +10,15 @@ import max.functional as F
 import max
 import max.nn as nn
 from max import driver
+from max.driver import CPU, Device
+from max.tensor import (
+    Tensor,
+    TensorType,
+    default_device,
+    default_dtype,
+    defaults,
+)
+
 import torch
 from transformers import AutoTokenizer
 
@@ -239,7 +248,10 @@ class LayerNorm(nn.Module):
         self.bias = Tensor.zeros([dim])
 
     def forward(self, x: Tensor) -> Tensor:
-        return F.layer_norm(x, gamma=self.weight, beta=self.bias, epsilon=self.eps)
+        print (self.weight.device, self.bias.device, self.eps)
+        normed_out = F.layer_norm(x, gamma=self.weight, beta=self.bias, epsilon=self.eps)
+        print (normed_out)
+        return normed_out
 
     def __call__(self, x: TensorValue) -> TensorValue:
         return self.forward(x)
@@ -374,7 +386,7 @@ class RecurrentSRM(nn.Module):
     def __repr__(self) -> str:
         return f"Structured Recurrent Mixer Model"
 
-device = driver.CPU()
+device = driver.Accelerator() if torch.cuda.is_available() else driver.CPU()
 
 if __name__ == "__main__":
     load_dotenv()
@@ -384,6 +396,7 @@ if __name__ == "__main__":
     tokenizer.pad_token = tokenizer.eos_token
     n_vocab =  len(tokenizer)
 
+    dtype, device = defaults()
     input_string = 'Four score and seven years ago, our'
     input_tokens = tokenizer(input_string, return_tensors='pt').input_ids[:, 1].unsqueeze(1) # no BOS token
     input_tokens = input_tokens.repeat(2, 1)
@@ -396,11 +409,12 @@ if __name__ == "__main__":
     n_heads = 4
     kernel= 1
 
-    model = RecurrentSRM(
+    with default_device(CPU()), default_dtype(dtype):
+        model = RecurrentSRM(
         n_vocab, 
         dim, 
-        tokenized_length, 
-        layers, 
+	tokenized_length, 
+	layers, 
         heads=n_heads, 
         copy=False, 
         mixed_heads=True, 
@@ -409,6 +423,7 @@ if __name__ == "__main__":
         use_projections=True
     )
 
+    model = model.to(device); print (device)
     # weight_path = f"{checkpoint_root}/..."
     # trained_weights = safe_open(weight_path)
     # model.load_state_dict(trained_weights)
@@ -421,13 +436,13 @@ if __name__ == "__main__":
     )
     print (length_type, token_type)
 
+    compiled_model = model.compile(token_type, length_type)
     input_tensor = Tensor.constant(input_tokens, dtype=DType.int64, device=device)
     length = Tensor.constant(length, dtype=DType.int64, device=device)
-    compiled_model = model.compile(token_type, length_type)
 
     start = time.time()
     print ('Model compilation completed')
-    output = compiled_model(input_tensor.to(device), length.to(device)).to(device)
+    output = compiled_model(input_tensor.to(device), length.to(device))
     print (f'Model forward pass completed in {time.time() - start} seconds')
     print (output.shape)
    
