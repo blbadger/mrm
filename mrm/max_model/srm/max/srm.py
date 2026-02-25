@@ -19,6 +19,13 @@ from max.tensor import (
     defaults,
 )
 
+from max.nn import (
+    Embedding,
+    Linear,
+    Module,
+    Sequential,
+)
+
 import torch
 from transformers import AutoTokenizer
 
@@ -170,9 +177,9 @@ class MixedRepeatHeads(nn.Module):
             self.proj_head = [max.nn.Linear(dim, hidden_dim) for i in range(n_heads)]
             self.out_proj = max.nn.Linear(dim, dim)
 
-        self.hidden_dim = hidden_dim
-        self.mixer_heads = [ColRepeatCausalLinear(seq_len, embedding_dim=hidden_dim, decay=decay, decay_constant=seq_len//512) for i in range(n_heads//2)] \
-                         + [RowRepeatCausalLinear(seq_len, embedding_dim=hidden_dim, decay=decay, decay_constant=seq_len//512) for i in range(n_heads//2)]
+        self.hidden_dim = hidden_dim # TODO: replace mixer heads list with module list or sequential, as this is not assigned to device properly
+        self.mixer_heads = max.nn.sequential.ModuleList(ColRepeatCausalLinear(seq_len, embedding_dim=hidden_dim, decay=decay, decay_constant=seq_len//512) for i in range(n_heads//2)) \
+                         + max.nn.sequential.ModuleList(RowRepeatCausalLinear(seq_len, embedding_dim=hidden_dim, decay=decay, decay_constant=seq_len//512) for i in range(n_heads//2))
 
     def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
         activations = []
@@ -257,7 +264,7 @@ class LayerNorm(nn.Module):
         return self.forward(x)
 
     def __repr__(self) -> str:
-        return f"Multi-Headed (h={self.heads}) Parallel Repeat Causal Linear Layer, mixing up to {dim} tokens with {embedding_dim} hidden dimension with decay={decay}"
+        return f"Layer Norm on {self.weight.device} device"
 
 class MixerBlock(nn.Module):
 
@@ -278,7 +285,7 @@ class MixerBlock(nn.Module):
 
         if heads is not None and heads > 0:
             if parallel_heads:
-                # flat mixer layer
+                # flatd mixer layer
                 self.token_mixing_layer = ParallelRepeatHeads(
                     hidden_dim,
                     seq_len, 
@@ -314,7 +321,8 @@ class MixerBlock(nn.Module):
             else:
                 self.token_mixing_layer = RowRepeatCausalLinear(seq_len, embedding_dim=hidden_dim) 
 
-    def forward(self, x: Tensor, index: int) -> torch.Tensor:
+    def forward(self, x) -> torch.Tensor:
+        x, index = x
         res = x
         print ('res')
         x = self.channel_norm(x)
@@ -330,10 +338,10 @@ class MixerBlock(nn.Module):
         x = self.token_norm(x)
         x = self.token_mixing_layer(x, index)
         x = x + res
-        return x
+        return (x, index)
 
-    def __call__(self, x: TensorValue, index: int) -> TensorValue:
-        return self.forward(x, index)
+    def __call__(self, x: TensorValue) -> TensorValue:
+        return self.forward(x)
 
     def __repr__(self) -> str:
         return f"Multi-Headed (h={self.heads}) Parallel Repeat Causal Linear Layer, mixing up to {dim} tokens with {embedding_dim} hidden dimension with decay={decay}"
@@ -363,9 +371,13 @@ class RecurrentSRM(nn.Module):
         self.num_blocks = num_blocks
         self.input_layer = max.nn.Embedding(vocab_size, dim=hidden_dim)
 
-        self.mixer_blocks = [MixerBlock(
+        #self.mixer_blocks = [MixerBlock(
+        #    hidden_dim, seq_len, heads=heads, mixed_heads=mixed_heads, decay=decay, parallel_heads=parallel_heads, use_projections=use_projections
+        #) for _ in range(num_blocks)]
+
+        self.mixer_blocks = Sequential(*(MixerBlock(
             hidden_dim, seq_len, heads=heads, mixed_heads=mixed_heads, decay=decay, parallel_heads=parallel_heads, use_projections=use_projections
-        ) for _ in range(num_blocks)]
+        ) for _ in range(num_blocks)))
         self.output_layer = max.nn.Linear(hidden_dim, vocab_size, bias=False)
 
     def forward(self, input_ids, index: int, **kwargs):
@@ -373,9 +385,9 @@ class RecurrentSRM(nn.Module):
         input_ids = input_ids[:, -1]
         x = self.input_layer(input_ids)
         # index = index[0]
-        for i, block in enumerate(self.mixer_blocks):
-            print (i);x = block(x, index)
-        
+        #for i, block in enumerate(self.mixer_blocks):
+        #    print (i);x = block(x, index)
+        x, _ = self.mixer_blocks((x, index))
         logits = self.output_layer(x)
         print ('model forward pass ended')
         return logits
@@ -386,7 +398,7 @@ class RecurrentSRM(nn.Module):
     def __repr__(self) -> str:
         return f"Structured Recurrent Mixer Model"
 
-device = driver.Accelerator() if torch.cuda.is_available() else driver.CPU()
+device =  driver.Accelerator()
 
 if __name__ == "__main__":
     load_dotenv()
@@ -401,7 +413,7 @@ if __name__ == "__main__":
     input_tokens = tokenizer(input_string, return_tensors='pt').input_ids[:, 1].unsqueeze(1) # no BOS token
     input_tokens = input_tokens.repeat(2, 1)
     length = torch.tensor([input_tokens.shape[1]])
-    print (input_tokens, length)
+    print (input_tokens, length, device)
 
     tokenized_length = 512
     dim = 64
@@ -423,7 +435,8 @@ if __name__ == "__main__":
         use_projections=True
     )
 
-    model = model.to(device); print (device)
+    
+    model = model.to(device)
     # weight_path = f"{checkpoint_root}/..."
     # trained_weights = safe_open(weight_path)
     # model.load_state_dict(trained_weights)
@@ -434,15 +447,15 @@ if __name__ == "__main__":
     length_type = TensorType(
         DType.int64, shape=[1], device=DeviceRef.from_device(device)
     )
-    print (length_type, token_type)
+    print (length_type, token_type, model.mixer_blocks[0].channel_norm)
 
-    compiled_model = model.compile(token_type, length_type)
+    model = model.compile(token_type, length_type)
     input_tensor = Tensor.constant(input_tokens, dtype=DType.int64, device=device)
     length = Tensor.constant(length, dtype=DType.int64, device=device)
 
     start = time.time()
     print ('Model compilation completed')
-    output = compiled_model(input_tensor.to(device), length.to(device))
+    output = model(input_tensor.to(device), length.to(device))
     print (f'Model forward pass completed in {time.time() - start} seconds')
     print (output.shape)
    
