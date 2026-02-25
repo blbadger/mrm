@@ -6,6 +6,7 @@ from typing import Any
 from max.dtype import DType
 from max.graph import DeviceRef, TensorValue, ops
 from max.tensor import Tensor, TensorType, defaults
+from max.graph.type import Type
 import max.functional as F
 import max
 import max.nn as nn
@@ -48,19 +49,23 @@ class ColRepeatCausalLinear(nn.Module):
         self.bias = Tensor.zeros([dim]) # init to zero
         self.decay_value = Tensor.ones([1])
         self.decay_constant = decay_constant
+        self.first_index = 0
         self.cache = torch.zeros([embedding_dim]) # TODO: initialize and send to shared mem via custom op
 
     def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
-        decay_value = (self.decay_value.clip( min=0.9, max=1)**(1/self.decay_constant))
+        self.weight = self.weight.to(x.device)
+        self.bias = self.bias.to(x.device);
+        self.decay_value = self.decay_value.to(x.device)
+        decay_value = (self.decay_value.clip(min=0.9, max=1)**(1/self.decay_constant))
         out = self.weight[0, index]*x + self.weight[0, index]*decay_value*self.cache + self.bias[index]
-        self.cache = (out - self.bias[index]) / self.weight[0, index] # cache update: factor out weight, remove bias
+        self.cache = (out - self.bias[index]) / self.weight[:, index] # cache update: factor out weight, remove bias
         return out
 
     def __call__(self, x: TensorValue, index: int) -> TensorValue:
         return self.forward(x, index)
 
     def __repr__(self) -> str:
-        return f"Column Repeat Causal Linear Layer, mixing up to {dim} tokens with {embedding_dim} hidden dimension with decay={decay}"
+        return f"Column Repeat Causal Linear Layer"
 
 class RowRepeatCausalLinear(nn.Module):
 
@@ -75,6 +80,9 @@ class RowRepeatCausalLinear(nn.Module):
 
     def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
         # expects x in shape [B, E]
+        self.weight = self.weight.to(x.device)
+        self.bias = self.bias.to(x.device);
+        self.decay_value = self.decay_value.to(x.device) 
         decay_value = (self.decay_value.clip(min=0.9, max=1)**(1/self.decay_constant))
         out = self.weight[0, index]*x + decay_value*self.cache + self.bias[index]
         self.cache = out - self.bias[index]
@@ -84,7 +92,7 @@ class RowRepeatCausalLinear(nn.Module):
         return self.forward(x, index)
 
     def __repr__(self) -> str:
-        return f"Row Repeat Causal Linear Layer, mixing up to {dim} tokens with {embedding_dim} hidden dimension with decay={decay}"
+        return f"Row Repeat Causal Linear Layer"
 
 class HeadedRepeatCausalLinear(nn.Module):
     """
@@ -174,12 +182,13 @@ class MixedRepeatHeads(nn.Module):
         self.n_heads = n_heads
         self.use_projections = use_projections
         if use_projections:
-            self.proj_head = [max.nn.Linear(dim, hidden_dim) for i in range(n_heads)]
+            self.proj_head = max.nn.sequential.ModuleList(max.nn.Linear(dim, hidden_dim) for i in range(n_heads))
             self.out_proj = max.nn.Linear(dim, dim)
 
         self.hidden_dim = hidden_dim # TODO: replace mixer heads list with module list or sequential, as this is not assigned to device properly
         self.mixer_heads = max.nn.sequential.ModuleList(ColRepeatCausalLinear(seq_len, embedding_dim=hidden_dim, decay=decay, decay_constant=seq_len//512) for i in range(n_heads//2)) \
                          + max.nn.sequential.ModuleList(RowRepeatCausalLinear(seq_len, embedding_dim=hidden_dim, decay=decay, decay_constant=seq_len//512) for i in range(n_heads//2))
+        print (self.mixer_heads)
 
     def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
         activations = []
@@ -189,6 +198,7 @@ class MixedRepeatHeads(nn.Module):
                 projection = self.proj_head[head](x)
             else:
                 projection = x[:, head*self.hidden_dim: (head+1)*self.hidden_dim]
+            print (projection.device)
             conv_projection = self.mixer_heads[head](projection, index)
             activations.append(conv_projection)
 
@@ -382,9 +392,9 @@ class RecurrentSRM(nn.Module):
 
     def forward(self, input_ids, index: int, **kwargs):
         print ('model forward pass started')
+        index = int(input_ids.shape[-1])
         input_ids = input_ids[:, -1]
         x = self.input_layer(input_ids)
-        # index = index[0]
         #for i, block in enumerate(self.mixer_blocks):
         #    print (i);x = block(x, index)
         x, _ = self.mixer_blocks((x, index))
@@ -443,7 +453,7 @@ if __name__ == "__main__":
     token_type = TensorType(
         DType.int64, shape=[input_tokens.shape[0], 1], device=DeviceRef.from_device(device)
     )
-
+    length_type = Type()
     length_type = TensorType(
         DType.int64, shape=[1], device=DeviceRef.from_device(device)
     )
