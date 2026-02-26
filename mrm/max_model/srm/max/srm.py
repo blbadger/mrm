@@ -223,14 +223,15 @@ class RepeatHeads(nn.Module):
         self.use_projections = use_projections
         self.hidden_dim = hidden_dim
         if self.use_projections:
-            self.proj_head = [max.nn.Linear(dim, hidden_dim) for i in range(n_heads)]
+            self.proj_head = nn.sequential.ModuleList(max.nn.Linear(dim, hidden_dim) for i in range(n_heads))
             self.out_proj = max.nn.Linear(dim, dim)
 
         if combined_heads:
             self.mixer_heads = [CombinedRepeatCausalLinear(seq_len, decay=decay, decay_constant=seq_len//512) for i in range(n_heads)]
         else:
-            self.mixer_heads = [ColRepeatCausalLinear(seq_len) for i in range(n_heads)]
-
+            self.mixer_heads = nn.sequential.ModuleList(ColRepeatCausalLinear(seq_len, embedding_dim=hidden_dim, decay=decay, decay_constant=seq_len//512) for i in range(n_heads))
+        print (self.mixer_heads, hidden_dim)
+      
     def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
         activations = []
         # pre-concatenated out projection
@@ -287,7 +288,7 @@ class MixerBlock(nn.Module):
         # TODO: check norm, might have to implement if off basis
         self.channel_norm = LayerNorm(hidden_dim)
         self.token_norm = LayerNorm(hidden_dim)
-
+        
         # channel-mixing layer
         self.channel_in = max.nn.Linear(hidden_dim, hidden_dim * expansion_factor)
         self.channel_out = max.nn.Linear(hidden_dim * expansion_factor, hidden_dim)
@@ -328,21 +329,17 @@ class MixerBlock(nn.Module):
             if kernel is not None and kernel > 1:
                 self.token_mixing_layer = KernelRepeatLinear(seq_len, kernel=kernel, decay=decay, decay_constant=seq_len//256)
             else:
-                self.token_mixing_layer = RowRepeatCausalLinear(seq_len, embedding_dim=hidden_dim) 
+                self.token_mixing_layer = ColRepeatCausalLinear(seq_len, embedding_dim=hidden_dim) 
 
     def forward(self, x) -> torch.Tensor:
         x, index = x
         res = x
-        print ('res')
         x = self.channel_norm(x)
-        print ('prein')
         x = self.channel_in(x)
-        print ('prenorm')
         x = F.silu(x)
         x = self.channel_out(x)
         x = x + res
 
-        print ('midway through block')
         res = x
         x = self.token_norm(x)
         x = self.token_mixing_layer(x, index)
@@ -380,9 +377,9 @@ class RecurrentSRM(nn.Module):
         self.num_blocks = num_blocks
         self.input_layer = max.nn.Embedding(vocab_size, dim=hidden_dim)
 
-        #self.mixer_blocks = [MixerBlock(
+        #self.mixer_blocks = nn.sequential.ModuleList(MixerBlock(
         #    hidden_dim, seq_len, heads=heads, mixed_heads=mixed_heads, decay=decay, parallel_heads=parallel_heads, use_projections=use_projections
-        #) for _ in range(num_blocks)]
+        #) for _ in range(num_blocks))
 
         self.mixer_blocks = Sequential(*(MixerBlock(
             hidden_dim, seq_len, heads=heads, mixed_heads=mixed_heads, decay=decay, parallel_heads=parallel_heads, use_projections=use_projections
@@ -395,7 +392,7 @@ class RecurrentSRM(nn.Module):
         input_ids = input_ids[:, -1]
         x = self.input_layer(input_ids)
         #for i, block in enumerate(self.mixer_blocks):
-        #    print (i);x = block(x, index)
+        #    x, index = block((x, index))
         x, _ = self.mixer_blocks((x, index))
         logits = self.output_layer(x)
         print ('model forward pass ended')
@@ -421,10 +418,12 @@ if __name__ == "__main__":
     input_string = 'Four score and seven years ago, our forefathers, for the purpose of creating'
     input_tokens = tokenizer(input_string, return_tensors='pt').input_ids[:, 1].unsqueeze(1) # no BOS token
     input_tokens = input_tokens.repeat(800000, 1)
+
     length = torch.tensor([input_tokens.shape[1]])
     print (input_tokens, length, device)
 
     tokenized_length = 512
+
     dim = 1024
     layers = 8
     n_heads = 4
@@ -460,7 +459,6 @@ if __name__ == "__main__":
     length_type = TensorType(
         DType.int64, shape=[1], device=DeviceRef.from_device(device)
     )
-    print (length_type, token_type, model.mixer_blocks[0].channel_norm)
 
     model = model.compile(token_type, length_type)
     input_tensor = Tensor.constant(input_tokens, dtype=DType.int64, device=device)
