@@ -45,8 +45,8 @@ class ColRepeatCausalLinear(nn.Module):
     def __init__(self, dim: int, embedding_dim=256, decay=False, decay_constant=1, **args):
         super().__init__()
         # Standard weight + bias
-        self.weight = Tensor.zeros([1, dim]) # init to randn
-        self.bias = Tensor.zeros([dim]) # init to zero
+        self.weight = Tensor.ones([1, dim]) * 0.4 # init to randn
+        self.bias = Tensor.ones([dim]) * 3 # init to zero
         self.decay_value = Tensor.ones([1])
         self.decay_constant = decay_constant
         self.first_index = 0
@@ -72,8 +72,8 @@ class RowRepeatCausalLinear(nn.Module):
     def __init__(self, dim: int, embedding_dim=256, decay=False, decay_constant=1, **args):
         super().__init__()
         # Standard weight + bias
-        self.weight = Tensor.ones([1, dim]) # init to randn
-        self.bias = Tensor.zeros([dim]) # init to zero
+        self.weight = Tensor.ones([1, dim]) * -0.3 # init to randn
+        self.bias = Tensor.ones([dim]) * 0.2 # init to zero
         self.decay_value = Tensor.ones([1])
         self.decay_constant = decay_constant
         self.cache = torch.zeros([embedding_dim]) # TODO: initialize and send to shared mem via custom op
@@ -188,7 +188,6 @@ class MixedRepeatHeads(nn.Module):
         self.hidden_dim = hidden_dim # TODO: replace mixer heads list with module list or sequential, as this is not assigned to device properly
         self.mixer_heads = max.nn.sequential.ModuleList(ColRepeatCausalLinear(seq_len, embedding_dim=hidden_dim, decay=decay, decay_constant=seq_len//512) for i in range(n_heads//2)) \
                          + max.nn.sequential.ModuleList(RowRepeatCausalLinear(seq_len, embedding_dim=hidden_dim, decay=decay, decay_constant=seq_len//512) for i in range(n_heads//2))
-        #print (self.mixer_heads)
 
     def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
         activations = []
@@ -416,16 +415,17 @@ if __name__ == "__main__":
     n_vocab =  len(tokenizer)
 
     dtype, device = defaults()
-    input_string = 'Four score and seven years ago, our'
-    batch_size = 1000
+    input_string = 'Four score and seven years ago, our forefathers, for the purpose of creating'
     input_tokens = tokenizer(input_string, return_tensors='pt').input_ids[:, 1].unsqueeze(1) # no BOS token
-    input_tokens = input_tokens.repeat(batch_size, 1)
+    input_tokens = input_tokens.repeat(800000, 1)
+
     length = torch.tensor([input_tokens.shape[1]])
     print (input_tokens, length, device)
 
     tokenized_length = 512
-    dim = 64
-    layers = 16
+
+    dim = 1024
+    layers = 8
     n_heads = 4
     kernel= 1
 
@@ -448,10 +448,14 @@ if __name__ == "__main__":
     # weight_path = f"{checkpoint_root}/..."
     # trained_weights = safe_open(weight_path)
     # model.load_state_dict(trained_weights)
+    
     token_type = TensorType(
-        DType.int64, shape=[input_tokens.shape[0], 1], device=DeviceRef.from_device(device)
+        DType.int64, shape=[input_tokens.shape[0], input_tokens.shape[1]], device=DeviceRef.from_device(device)
     )
-    length_type = Type()
+    #token_type = TensorType(
+    #    DType.int64, ("batch", "seqlen"), device=DeviceRef.from_device(device)
+    #)
+    
     length_type = TensorType(
         DType.int64, shape=[1], device=DeviceRef.from_device(device)
     )
@@ -463,8 +467,10 @@ if __name__ == "__main__":
     start = time.time()
     print ('Model compilation completed')
     for i in range(50):
+        print (i)
         output = model(input_tensor, length)
     end = time.time()
-    print (f'Model throughput: {batch_size / (end - start)} t/s')
+    total_tokens = 50 * input_tokens.shape[0]
+    print (f'{total_tokens / (end - start)} tokens per second')
     print (output.shape)
    
