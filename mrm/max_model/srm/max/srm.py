@@ -388,12 +388,13 @@ class RecurrentSRM(nn.Module):
 
     def forward(self, input_ids, index: int, **kwargs):
         print ('model forward pass started')
-        index = int(input_ids.shape[-1])
+        global int_index
+        #index = int(input_ids.shape[-1])
         input_ids = input_ids[:, -1]
         x = self.input_layer(input_ids)
         #for i, block in enumerate(self.mixer_blocks):
         #    x, index = block((x, index))
-        x, _ = self.mixer_blocks((x, index))
+        x, _ = self.mixer_blocks((x, int_index))
         logits = self.output_layer(x)
         print ('model forward pass ended')
         return logits
@@ -443,7 +444,7 @@ if __name__ == "__main__":
         use_projections=True
     )
 
-    
+    int_index = input_tokens.shape[-1]
     model = model.to(device)
     # weight_path = f"{checkpoint_root}/..."
     # trained_weights = safe_open(weight_path)
@@ -452,14 +453,10 @@ if __name__ == "__main__":
     token_type = TensorType(
         DType.int64, shape=[input_tokens.shape[0], input_tokens.shape[1]], device=DeviceRef.from_device(device)
     )
-    #token_type = TensorType(
-    #    DType.int64, ("batch", "seqlen"), device=DeviceRef.from_device(device)
-    #)
     
     length_type = TensorType(
         DType.int64, shape=[1], device=DeviceRef.from_device(device)
     )
-
     model = model.compile(token_type, length_type)
     input_tensor = Tensor.constant(input_tokens, dtype=DType.int64, device=device)
     length = Tensor.constant(length, dtype=DType.int64, device=device)
@@ -468,6 +465,7 @@ if __name__ == "__main__":
     print ('Model compilation completed')
     for i in range(50):
         print (i)
+        int_index += 1
         output = model(input_tensor, length)
     end = time.time()
     total_tokens = 50 * input_tokens.shape[0]
