@@ -24,24 +24,6 @@ class ColRepeatCausalLinear(nn.Module):
         self.decay_constant = decay_constant
         self.cache = torch.zeros(embedding_dim).to('cuda')
 
-    def _init_decay(self, seq_len):
-        decays = [(torch.clip(self.decay_value, min=0.9, max=1)**(1/self.decay_constant))**i for i in range(seq_len)]
-        return torch.tensor(decays)
-
-    def _init_weight(self, seq_len):
-        weight = [self.weight[:, seq_len-1] for _ in range(seq_len)]
-        return torch.tensor(weight)
-
-    def prefill_forward(self, x: torch.Tensor) -> torch.Tensor:
-        B, E, S = x.shape
-        decay_vector = self.init_decay(S)
-        W = (self._init_weight(S) * decay_vector).to(x.dtype)
-        x_reshaped = x.reshape(B * E, S)  # (B*E, S)
-        out = x_reshaped @ W  # (B*E, S)
-        out = out + self.bias.to(x.dtype)  # broadcast bias
-        out = out.view(B, E, S)  # reshape back
-        return out
-
     def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
         if x.dim() > 2:
             return self.prefill_forward(x)
@@ -63,20 +45,6 @@ class RowRepeatCausalLinear(nn.Module):
             self.decay_value = torch.ones(1)
         self.decay_constant = decay_constant
         self.cache = torch.zeros(embedding_dim).to('cuda')
-
-    def _init_decay(self, seq_len):
-        decays = [(torch.clip(self.decay_value, min=0.9, max=1)**(1/self.decay_constant))**i for i in range(seq_len)]
-        return torch.tensor(decays)
-
-    def prefill_forward(self, x: torch.Tensor) -> torch.Tensor:
-        B, E, S = x.shape
-        decay_vector = self.init_decay(S)
-        W = (self.weight[:, :S] * decay_vector).to(x.dtype)
-        x_reshaped = x.reshape(B * E, S)  # (B*E, S)
-        out = x_reshaped @ W  # (B*E, S)
-        out = out + self.bias.to(x.dtype)  # broadcast bias
-        out = out.view(B, E, S)  # reshape back
-        return out
 
     def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
         if x.dim() > 2:
@@ -101,24 +69,6 @@ class CombinedRepeatCausalLinear(nn.Module):
         self.decay_constant = decay_constant
         self.row_cache = torch.zeros(embedding)
         self.col_cache = torch.zeros(embedding)
-
-    def _init_decay(self, seq_len):
-        decays = [(torch.clip(self.decay_value, min=0.9, max=1)**(1/self.decay_constant))**i for i in range(seq_len)]
-        return torch.tensor(decays)
-
-    def _init_weight(self, seq_len):
-        weight = [self.weight[:, seq_len-1] for _ in range(seq_len)]
-        return torch.tensor(weight)
-
-    def prefill_forward(self, x: torch.Tensor) -> torch.Tensor:
-        B, E, S = x.shape
-        Wr = (self.weight[:, :S] * decay_vector).to(x.dtype)(self.weight[:, :S] * decay_vector).to(x.dtype)
-        Wc = W = (self._init_weight(S) * decay_vector).to(x.dtype)
-        x_reshaped = x.reshape(B * E, S)  # (B*E, S)
-        out = x_reshaped @ Wr + x_reshaped @ Wc  # (B*E, S)
-        out = out + self.bias.to(x.dtype)  # broadcast bias
-        out = out.view(B, E, S)  # reshape back
-        return out
 
     def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
         if x.dim() > 2:
@@ -189,28 +139,6 @@ class HeadedRepeatCausalLinear(nn.Module):
         else:
             self.decay_value = torch.ones(2, 1)
         self.cache = torch.zeros(heads, head_dim).to('cuda') # first half of cache vectors are row repeat, second half are col repeat
-
-    def _init_decay(self, seq_len):
-        decays = [(torch.clip(self.decay_value, min=0.9, max=1)**(1/self.decay_constant))**i for i in range(seq_len)]
-        return torch.tensor(decays)
-
-    def _init_weight(self, seq_len):
-        weight = [self.weight[:self.heads//2, seq_len-1] for _ in range(seq_len)]
-        return torch.tensor(weight)
-
-    def prefill_forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x.to(device) # x has shape [b * h, e, t]
-        # W has shape [h, t, t] and is repeated to make [b * h, t, t]
-        # row repeats
-        decay_vector = self.init_decay(S)
-        W_r = (self.weight[self.heads//2:, :S] * decay_vector).to(x.dtype)
-        W_c = (self._init_weight(S) * decay_vector).to(x.dtype)
-        W = self.vector_to_matrix(self.weight).repeat(x.shape[0]//self.heads, 1, 1) 
-        output = x @ W
-        repeated_bias = self.bias.repeat(x.shape[0]//self.heads, 1) # [h, t] repeated to [b * h, t]
-        repeated_bias = repeated_bias.unsqueeze(1).repeat(1, x.shape[1], 1) # repeated to [b * h, e, t]
-        output += repeated_bias
-        return output
 
     def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
         if x.dim() > 2:
