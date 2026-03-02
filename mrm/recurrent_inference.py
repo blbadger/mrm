@@ -10,7 +10,6 @@ import os
 from dotenv import load_dotenv
 import shutil
 
-
 class ColRepeatCausalLinear(nn.Module):
 
     def __init__(self, dim: int, embedding_dim=256, decay=False, decay_constant=1, **args):
@@ -25,7 +24,27 @@ class ColRepeatCausalLinear(nn.Module):
         self.decay_constant = decay_constant
         self.cache = torch.zeros(embedding_dim).to('cuda')
 
+    def _init_decay(self, seq_len):
+        decays = [(torch.clip(self.decay_value, min=0.9, max=1)**(1/self.decay_constant))**i for i in range(seq_len)]
+        return torch.tensor(decays)
+
+    def _init_weight(self, seq_len):
+        weight = [self.weight[:, seq_len-1] for _ in range(seq_len)]
+        return torch.tensor(weight)
+
+    def prefill_forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, E, S = x.shape
+        decay_vector = self.init_decay(S)
+        W = (self._init_weight(S) * decay_vector).to(x.dtype)
+        x_reshaped = x.reshape(B * E, S)  # (B*E, S)
+        out = x_reshaped @ W  # (B*E, S)
+        out = out + self.bias.to(x.dtype)  # broadcast bias
+        out = out.view(B, E, S)  # reshape back
+        return out
+
     def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
+        if x.dim() > 2:
+            return self.prefill_forward(x)
         decay_value = (torch.clip(self.decay_value, min=0.9, max=1)**(1/self.decay_constant)).to(x.device)
         out = self.weight[0, index]*x + self.weight[0, index]*decay_value*self.cache + self.bias[index]
         self.cache = (out - self.bias[index]) / self.weight[0, index] # cache update: factor out weight, remove bias
@@ -45,7 +64,23 @@ class RowRepeatCausalLinear(nn.Module):
         self.decay_constant = decay_constant
         self.cache = torch.zeros(embedding_dim).to('cuda')
 
+    def _init_decay(self, seq_len):
+        decays = [(torch.clip(self.decay_value, min=0.9, max=1)**(1/self.decay_constant))**i for i in range(seq_len)]
+        return torch.tensor(decays)
+
+    def prefill_forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, E, S = x.shape
+        decay_vector = self.init_decay(S)
+        W = (self.weight[:, :S] * decay_vector).to(x.dtype)
+        x_reshaped = x.reshape(B * E, S)  # (B*E, S)
+        out = x_reshaped @ W  # (B*E, S)
+        out = out + self.bias.to(x.dtype)  # broadcast bias
+        out = out.view(B, E, S)  # reshape back
+        return out
+
     def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
+        if x.dim() > 2:
+            return self.prefill_forward(x)
         # expects x in shape [B, E]
         decay_value = (torch.clip(self.decay_value, min=0.9, max=1)**(1/self.decay_constant)).to(x.device)
         out = self.weight[0, index]*x + decay_value*self.cache + self.bias[index]
@@ -67,8 +102,28 @@ class CombinedRepeatCausalLinear(nn.Module):
         self.row_cache = torch.zeros(embedding)
         self.col_cache = torch.zeros(embedding)
 
-    def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
+    def _init_decay(self, seq_len):
+        decays = [(torch.clip(self.decay_value, min=0.9, max=1)**(1/self.decay_constant))**i for i in range(seq_len)]
+        return torch.tensor(decays)
+
+    def _init_weight(self, seq_len):
+        weight = [self.weight[:, seq_len-1] for _ in range(seq_len)]
+        return torch.tensor(weight)
+
+    def prefill_forward(self, x: torch.Tensor) -> torch.Tensor:
         B, E, S = x.shape
+        Wr = (self.weight[:, :S] * decay_vector).to(x.dtype)(self.weight[:, :S] * decay_vector).to(x.dtype)
+        Wc = W = (self._init_weight(S) * decay_vector).to(x.dtype)
+        x_reshaped = x.reshape(B * E, S)  # (B*E, S)
+        out = x_reshaped @ Wr + x_reshaped @ Wc  # (B*E, S)
+        out = out + self.bias.to(x.dtype)  # broadcast bias
+        out = out.view(B, E, S)  # reshape back
+        return out
+
+    def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
+        if x.dim() > 2:
+            return self.prefill_forward(x)
+        B, E, = x.shape
         decay_value = (torch.clip(self.decay_value, min=0.9, max=1)**(1/self.decay_constant)).to(x.device)
         x = x.reshape(B * E, S)  # (B*E, S)
         index = x.shape[-1]
@@ -120,7 +175,6 @@ class HeadedRepeatCausalLinear(nn.Module):
     """
     Mixed-headed repeat module for ParallelRepeatHeads
     """
-
     def __init__(self, dim: int, heads: int, head_dim=256, decay=False, decay_constant=1):
 
         super().__init__()
@@ -136,7 +190,31 @@ class HeadedRepeatCausalLinear(nn.Module):
             self.decay_value = torch.ones(2, 1)
         self.cache = torch.zeros(heads, head_dim).to('cuda') # first half of cache vectors are row repeat, second half are col repeat
 
+    def _init_decay(self, seq_len):
+        decays = [(torch.clip(self.decay_value, min=0.9, max=1)**(1/self.decay_constant))**i for i in range(seq_len)]
+        return torch.tensor(decays)
+
+    def _init_weight(self, seq_len):
+        weight = [self.weight[:self.heads//2, seq_len-1] for _ in range(seq_len)]
+        return torch.tensor(weight)
+
+    def prefill_forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.to(device) # x has shape [b * h, e, t]
+        # W has shape [h, t, t] and is repeated to make [b * h, t, t]
+        # row repeats
+        decay_vector = self.init_decay(S)
+        W_r = (self.weight[self.heads//2:, :S] * decay_vector).to(x.dtype)
+        W_c = (self._init_weight(S) * decay_vector).to(x.dtype)
+        W = self.vector_to_matrix(self.weight).repeat(x.shape[0]//self.heads, 1, 1) 
+        output = x @ W
+        repeated_bias = self.bias.repeat(x.shape[0]//self.heads, 1) # [h, t] repeated to [b * h, t]
+        repeated_bias = repeated_bias.unsqueeze(1).repeat(1, x.shape[1], 1) # repeated to [b * h, e, t]
+        output += repeated_bias
+        return output
+
     def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
+        if x.dim() > 2:
+            return self.prefill_forward(x)
         x = x.to(device) # x has shape [b * h, e]
         x = rearrange(x, '(b h) e -> b e h', h=self.heads)
         decay_value = (torch.clip(self.decay_value, min=0.9, max=1)**(1/self.decay_constant)).to(x.device)
@@ -210,7 +288,7 @@ class MixedRepeatHeads(nn.Module):
             if self.use_projections:
                 projection = self.proj_head[head](x)
             else:
-                projection = x[:, head*self.hidden_dim: (head+1)*self.hidden_dim]
+                projection = x[..., head*self.hidden_dim: (head+1)*self.hidden_dim] # flexible for 2 or 3 dims
                 if torch.is_autocast_enabled():
                     projection = projection.to(torch.float16)
 
@@ -253,7 +331,7 @@ class RepeatHeads(nn.Module):
             if self.use_projections:
                 projection = self.proj_head[head](x)
             else:
-                projection = x[:, head*self.hidden_dim: (head+1)*self.hidden_dim]
+                projection = x[..., head*self.hidden_dim: (head+1)*self.hidden_dim] # for two or three dims
                 if torch.is_autocast_enabled():
                     projection = projection.to(torch.float16)
 
@@ -357,7 +435,6 @@ class RecurrentMLPMixer(nn.Module):
         heads=None,
         kernel=1,
         expanded_convs=False,
-        copy=False,
         mixed_heads=False,
         combined_heads=False,
         decay=False,
@@ -382,11 +459,8 @@ class RecurrentMLPMixer(nn.Module):
             ]
         )
         self.output_layer = nn.Linear(hidden_dim, vocab_size, bias=False)
-
         self._init_weights()
-
         self.loss_fn = nn.CrossEntropyLoss()
-        self.copy = copy
 
     def _init_weights(self):
         for m in self.modules():
@@ -401,10 +475,6 @@ class RecurrentMLPMixer(nn.Module):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
     def forward(self, input_ids, index: int, labels=None, **kwargs):
-        if self.copy:
-            input_ids = copy_dataset(input_ids)
-            if labels is not None:
-                labels = copy_dataset(labels)
         labels = labels[:, 1:].contiguous()
         x = self.input_layer(input_ids)
         for block in self.mixer_blocks:
@@ -418,7 +488,6 @@ class RecurrentMLPMixer(nn.Module):
 
             loss = self.loss_fn(logits, labels)
             return loss, logits
-
         else:
             return logits
 
@@ -441,6 +510,6 @@ if __name__ == "__main__":
     kernel= 1
 
     model = MLPMixer(
-        n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True)
+        n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True)
 
    
