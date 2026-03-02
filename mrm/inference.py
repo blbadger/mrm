@@ -106,8 +106,7 @@ class RecurrentInference(RecurrentMLPMixer, GenerationMixin):
 		num_blocks: int,
 		heads=None,
 		kernel=1,
-		expanded_convs=False,
-		copy=False,        
+		expanded_convs=False,     
 		mixed_heads=False,
 		combined_heads=False,
 		decay=False,
@@ -115,7 +114,7 @@ class RecurrentInference(RecurrentMLPMixer, GenerationMixin):
 		use_projections=True,
 		dropout_layer=False
 	):
-		super().__init__(vocab_size, hidden_dim, seq_len, num_blocks, heads=heads, kernel=kernel, expanded_convs=expanded_convs, copy=copy, 
+		super().__init__(vocab_size, hidden_dim, seq_len, num_blocks, heads=heads, kernel=kernel, expanded_convs=expanded_convs,
 			mixed_heads=mixed_heads, combined_heads=combined_heads, decay=decay, parallel_heads=parallel_heads, use_projections=use_projections)
 
 		self._init_weights()
@@ -149,16 +148,16 @@ class RecurrentInference(RecurrentMLPMixer, GenerationMixin):
 		return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
 	def build_cache(self, input_ids):
-		for i in range(len(input_ids[0])-1):
-			x = self.input_layer(input_ids[:, i])
-			for block in self.mixer_blocks:
-				x = block(x, i)
+		# model's forward pass
+		x = self.input_layer(input_ids)
+		for block in self.mixer_blocks:
+			x = block(x, index)
 		self.cache_built = True
 		return
 
 	def forward(self, input_ids, labels=None, **kwargs):
 		if not self.cache_built:
-			self.build_cache(input_ids)
+			self.build_cache(input_ids) # linear complexity forward for cache build
 		index = input_ids.shape[1] - 1
 		input_ids = input_ids[:, -1] # last token only
 		
@@ -191,8 +190,9 @@ if __name__ == "__main__":
     kernel = 1
 
     model = RecurrentInference(
-        n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
+        n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False,  
         mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True).float().to(device)
+
     generation_config = GenerationConfig()
     print (model)
     load_model(model, f"{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors")

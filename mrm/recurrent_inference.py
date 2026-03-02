@@ -509,7 +509,7 @@ if __name__ == "__main__":
     n_heads = 4
     kernel= 1
 
-    model = MLPMixer(
+    model = RecurrentMLPMixer(
         n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True)
 
    
