@@ -115,7 +115,7 @@ class RecurrentInference(RecurrentMLPMixer, GenerationMixin):
 		use_projections=True,
 		dropout_layer=False
 	):
-		super().__init__(vocab_size, hidden_dim, seq_len, num_blocks, heads=heads, kernel=kernel, expanded_convs=expanded_convs, copy=copy, 
+		super().__init__(vocab_size, hidden_dim, seq_len, num_blocks, heads=heads, kernel=kernel, expanded_convs=expanded_convs,
 			mixed_heads=mixed_heads, combined_heads=combined_heads, decay=decay, parallel_heads=parallel_heads, use_projections=use_projections)
 
 		self._init_weights()
