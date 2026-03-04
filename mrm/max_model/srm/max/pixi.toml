@@ -14,6 +14,7 @@ srm_test = "python srm.py"
 embedding_test = "python embedding_test.py"
 
 [dependencies]
-modular = ">=26.2.0.dev2026021805,<27"
+modular = ">=26.2.0.dev2026030405,<27"
 pytest = ">=9.0.2,<10"
 pytorch = ">=2.10.0,<3"
+max = ">=26.2.0.dev2026030405,<27"
