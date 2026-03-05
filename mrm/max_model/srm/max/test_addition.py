@@ -11,60 +11,75 @@
 # limitations under the License.
 # ===----------------------------------------------------------------------=== #
 
-import os
-import sys
+# DOC: max/develop/build-custom-ops.mdx
+
+from pathlib import Path
 
 import numpy as np
-import pytest
+from max.driver import CPU, Accelerator, Buffer, accelerator_count
+from max.dtype import DType
+from max.engine import InferenceSession
+from max.graph import DeviceRef, Graph, TensorType, ops
 
-# Add the project root to sys.path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, current_dir)
-from addition import add_tensors
+if __name__ == "__main__":
+    mojo_kernels = Path(__file__).parent / "kernels"
 
+    rows = 5
+    columns = 10
+    dtype = DType.float32
+    # Place the graph on a GPU, if available. Fall back to CPU if not.
+    device = CPU() if accelerator_count() == 0 else Accelerator()
+    # Configure our simple one-operation graph.
+    graph = Graph(
+        "addition",
+        # The custom Mojo operation is referenced by its string name, and we
+        # need to provide inputs as a list as well as expected output types.
+        forward=lambda x: ops.custom(
+            name="add_one",
+            device=DeviceRef.from_device(device),
+            values=[x],
+            out_types=[
+                TensorType(
+                    dtype=x.dtype,
+                    shape=x.tensor.shape,
+                    device=DeviceRef.from_device(device),
+                )
+            ],
+        )[0].tensor,
+        input_types=[
+            TensorType(
+                dtype,
+                shape=[rows, columns],
+                device=DeviceRef.from_device(device),
+            ),
+        ],
+        custom_extensions=[mojo_kernels],
+    )
 
-@pytest.mark.parametrize(
-    "input0, input1, expected",
-    [
-        (
-            np.array([2.0], dtype=np.float32),
-            np.array([3.0], dtype=np.float32),
-            np.array([5.0]),
-        ),
-        (
-            np.array([-2.0], dtype=np.float32),
-            np.array([-3.0], dtype=np.float32),
-            np.array([-5.0]),
-        ),
-        (
-            np.array([0.0], dtype=np.float32),
-            np.array([5.0], dtype=np.float32),
-            np.array([5.0]),
-        ),
-        (
-            np.array([1.23456], dtype=np.float32),
-            np.array([2.34567], dtype=np.float32),
-            np.array([3.58023]),
-        ),
-    ],
-)
-def test_add_tensors(
-    input0: np.ndarray, input1: np.ndarray, expected: np.ndarray
-) -> None:
-    result = add_tensors(input0, input1)
-    np.testing.assert_almost_equal(result, expected, decimal=5)
+    # Set up an inference session for running the graph.
+    session = InferenceSession(
+        devices=[device],
+    )
 
+    # Compile the graph.
+    model = session.load(graph)
 
-def test_add_tensors_type() -> None:
-    input0 = np.array([1.0], dtype=np.float32)
-    input1 = np.array([2.0], dtype=np.float32)
-    result = add_tensors(input0, input1)
-    assert isinstance(result, np.ndarray)
-    assert result.dtype == np.float32
+    # Fill an input matrix with random values.
+    x_values = np.random.uniform(size=(rows, columns)).astype(np.float32)
 
+    # Create a tensor and move it to the device (CPU or GPU).
+    x = Buffer.from_numpy(x_values).to(device)
 
-def test_add_tensors_shape() -> None:
-    input0 = np.array([1.0], dtype=np.float32)
-    input1 = np.array([2.0], dtype=np.float32)
-    result = add_tensors(input0, input1)
-    assert result.shape == (1,)
+    # Run inference with the input tensor.
+    result = model.execute(x)[0]
+
+    # Copy values back to the CPU to be read.
+    assert isinstance(result, Buffer)
+    result = result.to(CPU())
+
+    print("Graph result:")
+    print(result.to_numpy())
+    print()
+
+    print("Expected result:")
+    print(x_values + 1)

@@ -6,7 +6,8 @@ platforms = ["linux-64", "osx-arm64"]
 version = "0.1.0"
 
 [tasks]
-addition = "python3 addition.py"
+vector_addition = "python3 max_vec_attition.py"
+addition = "python test_addition.py"
 test_addition = "pytest test_addition.py"
 test = "python test.py"
 module_test = "python module_test.py"
