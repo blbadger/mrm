@@ -12,3 +12,5 @@
 # ===----------------------------------------------------------------------=== #
 
 from .add_one import *
+from .row_repeat import *
+from .col_repeat import *

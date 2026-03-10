@@ -1,17 +1,3 @@
-# ===----------------------------------------------------------------------=== #
-# Copyright (c) 2026, Modular Inc. All rights reserved.
-#
-# Licensed under the Apache License v2.0 with LLVM Exceptions:
-# https://llvm.org/LICENSE.txt
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-# ===----------------------------------------------------------------------=== #
-
-# DOC: max/develop/build-custom-ops.mdx
 
 from std.math import ceildiv
 
@@ -20,7 +6,6 @@ from std.runtime.asyncrt import DeviceContextPtr
 from tensor import InputTensor, ManagedTensorSlice, OutputTensor
 
 from std.utils.index import IndexList
-
 
 fn _row_repeat_cpu(
     output: ManagedTensorSlice[mut=True],
@@ -33,7 +18,6 @@ fn _row_repeat_cpu(
         var idx = IndexList[output.rank](i)
         var result = lhs.load[1](idx) + rhs.load[1](idx)
         output.store[1](idx, result)
-
 
 fn _row_repeat_gpu(
     output: ManagedTensorSlice[mut=True],
@@ -59,7 +43,7 @@ fn _row_repeat_gpu(
     )
 
 
-@compiler.register("vector_addition")
+@compiler.register("row_repeat")
 struct VectorAddition:
     @staticmethod
     fn execute[
@@ -72,13 +56,6 @@ struct VectorAddition:
         # the context is needed for some GPU calls
         ctx: DeviceContextPtr,
     ) raises:
-        # For a simple elementwise operation like this, the `foreach` function
-        # does much more rigorous hardware-specific tuning. We recommend using
-        # that abstraction, with this example serving purely as an illustration
-        # of how lower-level functions can be used to program GPUs via Mojo.
-
-        # At graph compilation time, we will know what device we are compiling
-        # this operation for, so we can specialize it for the target hardware.
         comptime if target == "cpu":
             _row_repeat_cpu(output, lhs, rhs, ctx)
         elif target == "gpu":
