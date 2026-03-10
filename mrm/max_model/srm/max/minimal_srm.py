@@ -123,6 +123,7 @@ class MixedRepeatHeads(Module):
         self.hidden_dim = hidden_dim # TODO: replace mixer heads list with module list or sequential, as this is not assigned to device properly
         self.mixer_heads = max.nn.sequential.ModuleList(ColRepeatCausalLinear(seq_len, embedding_dim=hidden_dim, decay=decay, decay_constant=seq_len//512) for i in range(n_heads//2)) \
                          + max.nn.sequential.ModuleList(RowRepeatCausalLinear(seq_len, embedding_dim=hidden_dim, decay=decay, decay_constant=seq_len//512) for i in range(n_heads//2))
+         
         print (self.mixer_heads)
 
     def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
@@ -179,7 +180,6 @@ class MixerBlock(Module):
         # channel-mixing layer
         self.channel_in = max.nn.Linear(hidden_dim, hidden_dim * expansion_factor)
         self.channel_out = max.nn.Linear(hidden_dim * expansion_factor, hidden_dim)
-
         if heads is not None and heads > 0:
             if parallel_heads:
                 # flatd mixer layer
@@ -254,10 +254,9 @@ class RecurrentSRM(Module):
         index = int(input_ids.shape[-1])
         input_ids = input_ids[:, -1]
         x = self.input_layer(input_ids)
-        for i, block in enumerate(self.mixer_blocks):
-            x, _ = block((x, index))
-        # x, _ = self.mixer_blocks((x, index))
-
+        #for i, block in enumerate(self.mixer_blocks):
+        #    x, _ = block((x, index))
+        x, _ = self.mixer_blocks((x, index))
         print ('model forward pass ended')
         return x
 
@@ -314,7 +313,7 @@ if __name__ == "__main__":
 
     tokenized_length = 512
     dim = 64
-    layers = 2
+    layers = 16
     n_heads = 4
     print (dtype)
 
@@ -327,8 +326,8 @@ if __name__ == "__main__":
             heads=n_heads, 
             mixed_heads=True, 
             decay=True, 
-            parallel_heads=False, 
-            use_projections=True
+            parallel_heads=True, 
+            use_projections=False
         )
     
     model = model.to(device)
@@ -359,13 +358,8 @@ if __name__ == "__main__":
             use_projections=True
         )
 
-    model2 = model2.to(device)
-    model2 = model2.compile(token_type, length_type)
     print ('compiled')
 
-    total_model = TotalModel(model1, model2)
-    total_model = totalModel.to(device)
-    total_model = total_model.comile(token_type, length_type)
 
     input_tensor = Tensor.constant(input_tokens, dtype=DType.int64, device=device)
     length = Tensor.constant(length, dtype=DType.int64, device=device)

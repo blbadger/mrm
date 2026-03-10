@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from typing import Any
+import asyncio
 
 from max.dtype import DType
 from max.graph import DeviceRef, TensorValue, ops
@@ -197,7 +198,6 @@ class MixedRepeatHeads(nn.Module):
                 projection = self.proj_head[head](x)
             else:
                 projection = x[:, head*self.hidden_dim: (head+1)*self.hidden_dim]
-            print (projection.device)
             conv_projection = self.mixer_heads[head](projection, index)
             activations.append(conv_projection)
 
@@ -230,7 +230,6 @@ class RepeatHeads(nn.Module):
             self.mixer_heads = [CombinedRepeatCausalLinear(seq_len, decay=decay, decay_constant=seq_len//512) for i in range(n_heads)]
         else:
             self.mixer_heads = nn.sequential.ModuleList(ColRepeatCausalLinear(seq_len, embedding_dim=hidden_dim, decay=decay, decay_constant=seq_len//512) for i in range(n_heads))
-        print (self.mixer_heads, hidden_dim)
       
     def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
         activations = []
@@ -265,9 +264,7 @@ class LayerNorm(nn.Module):
         self.bias = Tensor.zeros([dim])
 
     def forward(self, x: Tensor) -> Tensor:
-        print (self.weight.device, self.bias.device, self.eps)
         normed_out = F.layer_norm(x, gamma=self.weight, beta=self.bias, epsilon=self.eps)
-        print (normed_out)
         return normed_out
 
     def __call__(self, x: TensorValue) -> TensorValue:
@@ -387,17 +384,16 @@ class RecurrentSRM(nn.Module):
         self.output_layer = max.nn.Linear(hidden_dim, vocab_size, bias=False)
 
     def forward(self, input_ids, index: int, **kwargs):
-        print ('model forward pass started')
+        start = time.time()
         global int_index
         #index = int(input_ids.shape[-1])
         input_ids = input_ids[:, -1]
         x = self.input_layer(input_ids)
         #for i, block in enumerate(self.mixer_blocks):
-        #    x, index = block((x, index))
+        #    x, index = block((x, int_index))
         x, _ = self.mixer_blocks((x, int_index))
-        logits = self.output_layer(x)
-        print ('model forward pass ended')
-        return logits
+        output = self.output_layer(x)
+        return output
 
     def __call__(self, x: TensorValue, index: int) -> TensorValue:
         return self.forward(x, index)
@@ -417,16 +413,15 @@ if __name__ == "__main__":
 
     dtype, device = defaults()
     input_string = 'Four score and seven years ago, our forefathers, for the purpose of creating'
-    input_tokens = tokenizer(input_string, return_tensors='pt').input_ids[:, 1].unsqueeze(1) # no BOS token
-    input_tokens = input_tokens.repeat(1000, 1)
+    input_tokens = tokenizer(input_string, return_tensors='pt').input_ids[:, 1].unsqueeze(1).to(torch.int64) # no BOS token
+    input_tokens = input_tokens.repeat(1200000, 1)
 
-    length = torch.tensor([input_tokens.shape[1]])
-    print (input_tokens, length, device)
+    length = torch.tensor([input_tokens.shape[1]]).to(torch.int64)
+    #print (input_tokens, length, device)
 
     tokenized_length = 512
-
-    dim = 1024
-    layers = 16
+    dim = 512
+    layers = 8
     n_heads = 4
     kernel= 1
 
@@ -457,18 +452,25 @@ if __name__ == "__main__":
     length_type = TensorType(
         DType.int64, shape=[1], device=DeviceRef.from_device(device)
     )
+
     model = model.compile(token_type, length_type)
     input_tensor = Tensor.constant(input_tokens, dtype=DType.int64, device=device)
     length = Tensor.constant(length, dtype=DType.int64, device=device)
+    async def token_get(output):
+        tokens = F.argmax(input_tensor.to(CPU()))
+        return tokens
 
     start = time.time()
     print ('Model compilation completed')
-    for i in range(50):
+    for i in range(20):
         print (i)
         int_index += 1
         output = model(input_tensor, length)
+        tokens = token_get(output)
+        print (tokens)
     end = time.time()
-    total_tokens = 50 * input_tokens.shape[0]
+    print (f"etime: {end - start}")
+    total_tokens = 20 * input_tokens.shape[0]
     print (f'{total_tokens / (end - start)} tokens per second')
     print (output.shape)
    
