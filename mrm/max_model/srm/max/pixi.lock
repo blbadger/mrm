@@ -134,6 +134,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/opentelemetry-semantic-conventions-0.56b0-pyh3cfb1c2_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/optree-0.18.0-py314h9891dd4_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/packaging-26.0-pyhcf101f3_0.conda
+      - conda: https://conda.anaconda.org/conda-forge/noarch/pathlib-1.0.1-py_1.tar.bz2
       - conda: https://conda.anaconda.org/conda-forge/noarch/pathspec-1.0.4-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/pillow-12.1.1-py314h8ec4b1a_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/platformdirs-4.9.2-pyhcf101f3_0.conda
@@ -329,6 +330,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/opentelemetry-semantic-conventions-0.56b0-pyh3cfb1c2_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/optree-0.19.0-py314h6cfcd04_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/packaging-26.0-pyhcf101f3_0.conda
+      - conda: https://conda.anaconda.org/conda-forge/noarch/pathlib-1.0.1-py_1.tar.bz2
       - conda: https://conda.anaconda.org/conda-forge/noarch/pathspec-1.0.4-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/pillow-12.1.1-py314hab283cf_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/platformdirs-4.9.2-pyhcf101f3_0.conda
@@ -2774,6 +2776,15 @@ packages:
   license_family: APACHE
   size: 72010
   timestamp: 1769093650580
+- conda: https://conda.anaconda.org/conda-forge/noarch/pathlib-1.0.1-py_1.tar.bz2
+  sha256: ab8c9402ef7d8e8b23b66f27a5e9eafd63d3193c6531a62b4ae9b8a949f356e7
+  md5: 930df2b5ca63ffdd1dd5f8b235f344a2
+  depends:
+  - python
+  license: MIT
+  license_family: MIT
+  size: 14998
+  timestamp: 1531194126420
 - conda: https://conda.anaconda.org/conda-forge/noarch/pathspec-1.0.4-pyhd8ed1ab_0.conda
   sha256: 29ea20d0faf20374fcd61c25f6d32fb8e9a2c786a7f1473a0c3ead359470fbe1
   md5: 2908273ac396d2cd210a8127f5f1c0d6

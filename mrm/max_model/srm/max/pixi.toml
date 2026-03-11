@@ -14,6 +14,7 @@ module_test = "python module_test.py"
 srm_test = "python srm.py"
 minimal_srm = "python minimal_srm.py"
 embedding_test = "python embedding_test.py"
+reference_srm = "python reference_srm.py"
 
 [dependencies]
 pytest = ">=9.0.2,<10"
