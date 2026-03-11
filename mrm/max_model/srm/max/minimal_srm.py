@@ -94,7 +94,6 @@ class HeadedRepeatCausalLinear(nn.Module):
         self.cache = Tensor.zeros([batch_size, heads, head_dim])# first half of cache vectors are row repeat, second half are col repeat
 
     def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
-        print ('x shape', x.shape) # shape (b*h) e
         self.weight = self.weight.to(x.device)
         self.bias = self.bias.to(x.device)
         x = x.reshape([x.shape[0]//self.heads, x.shape[1], self.heads]) # reshapes (b h) e -> b e h
@@ -111,7 +110,6 @@ class HeadedRepeatCausalLinear(nn.Module):
         col_out_cache = col_out / self.weight[:self.heads//2, index]
         self.cache = F.concat([row_out_cache, col_out_cache], axis=-1)
         self.cache = self.cache.permute([0, 2, 1])
-        print ('cache shape', self.cache.shape)
         
         output = F.concat([col_out, row_out], axis=-1)
         output += self.bias[:, index]
@@ -133,14 +131,14 @@ class ParallelRepeatHeads(Module):
         # note that the hidden dim is by definition dim // n_heads
         print ('parallel heads')
         self.n_heads = n_heads
-        self.in_proj = max.nn.Linear(dim, dim)
-        self.out_proj = max.nn.Linear(dim, dim)
-        self.mixer_heads = HeadedRepeatCausalLinear(seq_len, n_heads, head_dim=dim//n_heads, decay=decay, decay_constant=seq_len//512)
+        if use_projections:
+            self.in_proj = max.nn.Linear(dim, dim)
+            self.out_proj = max.nn.Linear(dim, dim)
         self.use_projections = use_projections
+        self.mixer_heads = HeadedRepeatCausalLinear(seq_len, n_heads, head_dim=dim//n_heads, decay=decay, decay_constant=seq_len//512)
         self.head_dim = head_dim
     
     def forward(self, x:torch.Tensor, index: int) -> torch.Tensor:
-        
         batch_dim = x.shape[0]
         if self.use_projections:
             x = self.in_proj(x)
@@ -288,12 +286,10 @@ class RecurrentSRM(Module):
         ) for _ in range(num_blocks)))
 
     def forward(self, input_ids, index: int):
-        print ('model forward pass started')
         index = int(input_ids.shape[-1])
         input_ids = input_ids[:, -1]
         x = self.input_layer(input_ids)
         x, _ = self.mixer_blocks((x, index))
-        print ('model forward pass ended')
         return x
 
 class SRMLMHeadModel(Module):

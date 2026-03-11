@@ -95,7 +95,7 @@ class HeadedRepeatCausalLinear(nn.Module):
         self.cache = Tensor.zeros([batch_size, heads, head_dim])# first half of cache vectors are row repeat, second half are col repeat
 
     def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
-        print ('x shape', x.shape) # shape (b*h) e
+        # x has shape (b*h) e
         self.weight = self.weight.to(x.device)
         self.bias = self.bias.to(x.device)
         x = x.reshape([x.shape[0]//self.heads, x.shape[1], self.heads]) # reshapes (b h) e -> b e h
@@ -112,7 +112,6 @@ class HeadedRepeatCausalLinear(nn.Module):
         col_out_cache = col_out / self.weight[:self.heads//2, index]
         self.cache = F.concat([row_out_cache, col_out_cache], axis=-1)
         self.cache = self.cache.permute([0, 2, 1])
-        print ('cache shape', self.cache.shape)
         
         output = F.concat([col_out, row_out], axis=-1)
         output += self.bias[:, index]
@@ -134,8 +133,9 @@ class ParallelRepeatHeads(Module):
         # note that the hidden dim is by definition dim // n_heads
         print ('parallel heads')
         self.n_heads = n_heads
-        self.in_proj = max.nn.Linear(dim, dim)
-        self.out_proj = max.nn.Linear(dim, dim)
+        if use_projections:
+            self.in_proj = max.nn.Linear(dim, dim)
+            self.out_proj = max.nn.Linear(dim, dim)
         self.mixer_heads = HeadedRepeatCausalLinear(seq_len, n_heads, head_dim=dim//n_heads, decay=decay, decay_constant=seq_len//512)
         self.use_projections = use_projections
         self.head_dim = head_dim
@@ -334,7 +334,7 @@ if __name__ == "__main__":
     length = torch.tensor([input_tokens.shape[1]]).to(torch.int64)
     tokenized_length = 512
     dim = 512
-    layers = 6
+    layers = 16
     n_heads = 4
     kernel= 1
 
@@ -346,10 +346,10 @@ if __name__ == "__main__":
         layers, 
         heads=n_heads, 
         copy=False, 
-        mixed_heads=True, 
+        mixed_heads=True,
         decay=True, 
         parallel_heads=True, 
-        use_projections=True
+        use_projections=False
     )
 
     int_index = input_tokens.shape[-1]
