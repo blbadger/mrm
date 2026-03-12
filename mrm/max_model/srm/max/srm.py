@@ -141,7 +141,6 @@ class ParallelRepeatHeads(Module):
         self.head_dim = head_dim
     
     def forward(self, x:torch.Tensor, index: int) -> torch.Tensor:
-        
         batch_dim = x.shape[0]
         if self.use_projections:
             x = self.in_proj(x)
@@ -349,7 +348,7 @@ if __name__ == "__main__":
         mixed_heads=True,
         decay=True, 
         parallel_heads=True, 
-        use_projections=False
+        use_projections=True
     )
 
     int_index = input_tokens.shape[-1]
