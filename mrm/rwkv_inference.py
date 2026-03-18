@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import transformers
 from transformers import RwkvConfig, RwkvModel, RwkvForCausalLM, AutoTokenizer
+from transformers.generation import GenerationMixin, GenerationConfig
 from prettytable import PrettyTable
 from safetensors.torch import save_file, load_model
 from safetensors import safe_open
@@ -14,6 +15,7 @@ from dotenv import load_dotenv
 import os
 import mlflow
 #warnings.filterwarnings(action='ignore')
+import time
 import logging
 logging.basicConfig(level=logging.INFO)
 
@@ -47,10 +49,10 @@ data_root = os.getenv('DATA_ROOT')
 
 device = 'cuda' if torch.cuda.is_available else 'cpu'
 
-dim = 512
+dim = 256
 context_length = 512
 compression = 1
-n_layers = 4
+n_layers = 16
 n_heads = 4
 
 tokenizer = AutoTokenizer.from_pretrained(f"{data_root}/tokenizer_fineweb_8k")
@@ -65,66 +67,16 @@ config_kwargs = {
 # Initializing a LLaMA model
 configuration = RwkvConfig(**config_kwargs)
 model = RwkvModel(configuration)
-model = RWKVCLM(model, dim=dim, vocab_size=vocab_size)
-#model = RwkvForCausalLM(configuration)
-train_path = f"{data_root}/fineweb-edu-tokenized-train-c512-8k"
-test_path = f"{data_root}/fineweb-edu-tokenized-test-c512-8k"
+#model = RWKVCLM(model, dim=dim, vocab_size=vocab_size)
+model = RwkvForCausalLM(configuration).to(device)
 
-datasets.config.IN_MEMORY_MAX_SIZE = 1e9
-train_dataset = load_from_disk(train_path) 
-test_dataset = load_from_disk(test_path) 
-print (len(train_dataset[0]['input_ids']))
+generation_config = GenerationConfig()
+text ='''Four score and seven years ago, our'''
+tokens_to_generate = 500
+batch_size = 40
+input_ids = torch.tensor(tokenizer.encode(text)[1:]).repeat(batch_size, 1 ).to(device) # ignore bos token
+print (input_ids.shape)
+start = time.time()
+output_ids = model.generate(input_ids, max_length=len(input_ids[0]) + tokens_to_generate, generation_config=generation_config) #, streamer=streamer)
+print (f'Output example: {tokenizer.decode(output_ids[0])}, Elapsed time: {time.time() - start}, t/s: {(batch_size * tokens_to_generate)/(time.time() - start)}')
 
-total_batch_size = 128
-n_devices = 1
-
-# get number of devices (assumes that all visible devices are used for training)
-if torch.cuda.is_available():
-    n_devices = torch.cuda.device_count()
-batch_size = total_batch_size // n_devices
-# descriptive name for output
-output_dir = f'{checkpoint_root}/fineweb_rwkv\
-_d{dim}\
-_n{n_layers}\
-_c{context_length}_b{batch_size}x{n_devices}'
-
-print (model)
-#transformers.models.rwkv.modeling_rwkv.load_wkv_cuda_kernel(512)
-mlflow.end_run()
-training_arguments = transformers.TrainingArguments(
-        num_train_epochs=3,
-        per_device_train_batch_size=batch_size,
-        per_device_eval_batch_size=batch_size,
-        gradient_accumulation_steps=1,
-        warmup_steps=500,
-        eval_steps=4000,
-        save_steps=20000,
-        learning_rate=2e-5,
-        bf16=False,
-        fp16=True,
-        eval_strategy='steps',
-        output_dir=output_dir,
-        optim='adamw_torch',
-        max_steps=200000,
-        #torch_compile=True
-)
-
-trainer = transformers.Trainer(
-        model=model,
-        train_dataset=train_dataset,
-        eval_dataset=test_dataset,
-        args=training_arguments,
-        data_collator=transformers.DataCollatorForLanguageModeling(tokenizer, mlm=False),
-)
-
-print (f"training model, saving to {output_dir}")
-# save driver code snapshot in checkpoint dir
-code_path = os.path.abspath(__file__)
-if not os.path.isdir(output_dir):
-        os.mkdir(output_dir)
-shutil.copy(code_path, output_dir)
-
-print (f"training begun: saving results in {output_dir}")
-model.train()
-#trainer.train()
-trainer.train(output_dir + '/checkpoint-60000')

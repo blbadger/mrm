@@ -1,4 +1,7 @@
 .env
 *mlruns
-venv
-mrm-venv
+venv/
+mrm-venv/
+mamba-venv/
+*venv/
+vllm_venv/

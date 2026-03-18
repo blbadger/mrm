@@ -49,7 +49,7 @@ class ColRepeatCausalLinear(Module):
         self.decay_value = Tensor.ones([1])
         self.decay_constant = decay_constant
         self.first_index = 0
-        self.cache = Tensor.zeros([embedding_dim]) # TODO: initialize and send to shared mem via custom op
+        self.cache = torch.zeros([embedding_dim]) # TODO: initialize and send to shared mem via custom op
 
     def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
         self.weight = self.weight.to(x.device)
@@ -68,7 +68,7 @@ class RowRepeatCausalLinear(Module):
         self.bias = Tensor.zeros([dim]) # init to zero
         self.decay_value = Tensor.ones([1])
         self.decay_constant = decay_constant
-        self.cache = Tensor.zeros([embedding_dim]) # TODO: initialize and send to shared mem via custom op
+        self.cache = torch.zeros([embedding_dim]) # TODO: initialize and send to shared mem via custom op
 
     def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
         # expects x in shape [B, E]
@@ -307,6 +307,7 @@ class RecurrentSRM(nn.Module):
         #    x, index = block((x, int_index))
         x, _ = self.mixer_blocks((x, int_index))
         output = self.output_layer(x)
+        #output = F.argmax(output, axis=1)
         return output
 
     def __call__(self, x: TensorValue, index: int) -> TensorValue:
@@ -324,16 +325,15 @@ if __name__ == "__main__":
     n_vocab =  len(tokenizer)
 
     dtype, device = defaults()
-    device = CPU()
     input_string = 'Four score and seven years ago, our forefathers, for the purpose of creating'
     input_tokens = tokenizer(input_string, return_tensors='pt').input_ids[:, 1].unsqueeze(1).to(torch.int64) # no BOS token
-    batch_size = 10
+    batch_size = 500000
     input_tokens = input_tokens.repeat(batch_size, 1)
 
     length = torch.tensor([input_tokens.shape[1]]).to(torch.int64)
     tokenized_length = 512
-    dim = 512
-    layers = 16
+    dim = 1024
+    layers = 8
     n_heads = 4
     kernel= 1
 
@@ -347,7 +347,7 @@ if __name__ == "__main__":
         copy=False, 
         mixed_heads=True,
         decay=True, 
-        parallel_heads=True, 
+        parallel_heads=False, 
         use_projections=True
     )
 
@@ -373,14 +373,17 @@ if __name__ == "__main__":
         tokens = F.argmax(input_tensor.to(CPU()))
         return tokens
 
+    output = model(input_tensor, length)
+    t = F.argmax(output)
     start = time.time()
     print ('Model compilation completed')
     for i in range(20):
-        print (i)
+        #print (i)
         int_index += 1
         output = model(input_tensor, length)
-        tokens = token_get(output)
-        print (tokens)
+        tokens = torch.argmax(torch.tensor(output), dim=1)
+        #tokens = dtoken_get(output)
+    
     end = time.time()
     print (f"etime: {end - start}")
     total_tokens = 20 * input_tokens.shape[0]
