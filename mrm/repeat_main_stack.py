@@ -484,9 +484,8 @@ class ParallelRepeatHeads(nn.Module):
         # note that the hidden dim is by definition dim // n_heads
         super().__init__()
         self.n_heads = n_heads
-        if use_projections:
-            self.in_proj = nn.Linear(dim, dim)
-            self.out_proj = nn.Linear(dim, dim)
+        self.in_proj = nn.Linear(dim, dim)
+        self.out_proj = nn.Linear(dim, dim)
         self.mixer_heads = HeadedRepeatCausalLinear(seq_len, n_heads, decay=decay, decay_constant=seq_len//512)
         self.use_projections = use_projections
     
@@ -516,7 +515,7 @@ class MixedRepeatHeads(nn.Module):
 
         self.hidden_dim = hidden_dim
         self.mixer_heads = nn.ModuleList(
-            [ColRepeatCausalLinear(seq_len, decay=decay, decay_constant=2) for i in range(n_heads//2)] + [RowRepeatCausalLinear(seq_len, decay=decay, decay_constant=2) for i in range(n_heads//2)] # TODO: both decay constants are seq_len//2
+            [ColRepeatCausalLinear(seq_len, decay=decay, decay_constant=seq_len//512) for i in range(n_heads//2)] + [RowRepeatCausalLinear(seq_len, decay=decay, decay_constant=seq_len//512) for i in range(n_heads//2)]
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -696,7 +695,7 @@ class MLPMixer(nn.Module):
         num_blocks: int,
         heads=None,
         kernel=1,
-        expanded_convs=False,
+	expanded_convs=False,
         copy=False,
         mixed_heads=False,
         combined_heads=False,
@@ -789,14 +788,14 @@ if __name__ == "__main__":
     load_dotenv()
     checkpoint_root = os.getenv('CHECKPOINT_ROOT')
     data_root = os.getenv('DATA_ROOT')
-    tokenizer = AutoTokenizer.from_pretrained(f"{data_root}/tokenizer_fineweb_8k")
+    tokenizer = AutoTokenizer.from_pretrained(f"{data_root}/tokenizer_stack_8k")
     tokenizer.pad_token = tokenizer.eos_token
     n_vocab = len(tokenizer)
     print("Vocab size: ", n_vocab)
 
-    tokenized_length = 512
-    dim = 1260
-    layers = 20
+    tokenized_length = 1024
+    dim = 1024
+    layers = 16
     n_heads = 4
     kernel= 1
 
@@ -808,9 +807,9 @@ if __name__ == "__main__":
     n_gpus = torch.cuda.device_count()
     total_batch_size = 64 #  128
     batch_size = total_batch_size // n_gpus
-    train_path = f"{data_root}/fineweb-edu-tokenized-train-c512"
-    test_path = f"{data_root}/fineweb-edu-tokenized-test-c512"
-    output_dir = f"{checkpoint_root}/fineweb_srm_scaling_h{n_heads}_mixed_decay_nonparallel_projs_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
+    train_path = f"{data_root}/stack-tokenized-train-c1024-8k"
+    test_path = f"{data_root}/stack-tokenized-test-c1024-8k"
+    output_dir = f"{checkpoint_root}/stack_h{n_heads}_mixed_decay_nonparallel_projs_k{kernel}_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
   
     datasets.config.IN_MEMORY_MAX_SIZE = 1e9
     train_dataset = load_from_disk(train_path, keep_in_memory=None)
@@ -821,14 +820,14 @@ if __name__ == "__main__":
     print(model)
     print (output_dir)
     training_arguments = transformers.TrainingArguments(
-        num_train_epochs=1,
+        num_train_epochs=2,
         per_device_train_batch_size=batch_size,
         per_device_eval_batch_size=batch_size,
-        gradient_accumulation_steps=2,
-        warmup_steps=50,
+        gradient_accumulation_steps=1,
+	warmup_steps=50,
         eval_steps=4000,
         save_steps=8000,
-        learning_rate=5e-4,
+        learning_rate=2e-4,
         fp16=True,
         eval_strategy="steps",
         output_dir=output_dir,
@@ -854,4 +853,4 @@ if __name__ == "__main__":
     shutil.copy(code_path, output_dir) 
 
     model.train()
-    trainer.train(output_dir + '/checkpoint-136000')
+    trainer.train()

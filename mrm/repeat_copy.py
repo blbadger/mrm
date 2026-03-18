@@ -4,6 +4,7 @@ from einops import rearrange
 import transformers
 from transformers import AutoTokenizer, LlamaForCausalLM, LlamaModel
 import datasets
+from safetensors.torch import load_model
 from datasets import load_from_disk
 import mlflow
 import os
@@ -252,12 +253,13 @@ if __name__ == "__main__":
     tokenized_length = 1024
     dim = 1024
     layers = 16
-    n_heads = 4
-    kernel = 1
+    n_heads = None
+    kernel = 4
 
     model = CopyMixer(n_vocab, dim,  tokenized_length, layers, kernel=kernel, heads=n_heads, copy=True, 
-        mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=False)
+        mixed_heads=False, combined_heads=False, decay=False, parallel_heads=False, use_projections=True)
 
+    load_model(model, f"{data_root}/fineweb_copy_repeat_k4_256_n16_b16x4/checkpoint-10000/model.safetensors")
     train_path = f"{data_root}/fineweb-edu-tokenized-train-c1024"
     test_path = f"{data_root}/fineweb-edu-tokenized-test-c1024"
     

@@ -1,10 +1,12 @@
 from inference import RecurrentInference
 from datasets import load_dataset
-from transformers import AutoTokenizer
+from safetensors.torch import load_model
+from transformers import AutoTokenizer, GenerationConfig, TextStreamer
 from dotenv import load_dotenv
 import shutil
 import torch
 import os
+import time
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 if __name__ == "__main__":
@@ -25,16 +27,20 @@ if __name__ == "__main__":
     model = RecurrentInference(
         n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
         mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True).float().to(device)
-    generation_config = GenerationConfig(top_p=0.9)
+    generation_config = GenerationConfig(do_sample=True, top_p=10)
     print (model)
     load_model(model, f"{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors")
     model = torch.compile(model)
 
     dataset = load_dataset("openai/gsm8k", "main")
 
-    example = dataset.test[0]
-    batch_size = 100
-    input_ids = torch.tensor(tokenizer.encode(text)[1:]).repeat(batch_size, 1).to(device) # ignore bos token
+    n_fewshot = 3
+    fewshot_examples = '\n'.join([f"Question: {dataset['train'][i]['question']}\nAnswer: {dataset['train'][i]['answer']}" for i in range(n_fewshot)])
+    example = dataset['test'][0]['question']
+    full_input = f'{fewshot_examples}\nQuestion: {example}\nAnswer: '
+    print (example)
+    batch_size = 1000
+    input_ids = torch.tensor(tokenizer.encode(full_input)).repeat(batch_size, 1).to(device) # ignore bos token
     print (input_ids.shape)
     tokens_to_generate = 100
     streamer = TextStreamer(tokenizer, skip_prompt=False)
