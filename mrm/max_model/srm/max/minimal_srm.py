@@ -39,7 +39,6 @@ load_dotenv()
 checkpoint_root = os.getenv('CHECKPOINT_ROOT')
 data_root = os.getenv('DATA_ROOT')
 
-
 class ColRepeatCausalLinear(Module):
 
     def __init__(self, dim: int, embedding_dim=256, decay=False, decay_constant=1, **args):
@@ -49,11 +48,11 @@ class ColRepeatCausalLinear(Module):
         self.decay_value = Tensor.ones([1])
         self.decay_constant = decay_constant
         self.first_index = 0
-        self.cache = torch.zeros([embedding_dim]) # TODO: initialize and send to shared mem via custom op
+        self.cache = Tensor.zeros([embedding_dim]) # TODO: initialize and send to shared mem via custom op
 
     def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
         self.weight = self.weight.to(x.device)
-        self.bias = self.bias.to(x.device);
+        self.bias = self.bias.to(x.device)
         self.decay_value = self.decay_value.to(x.device)
         decay_value = (self.decay_value.clip(min=0.9, max=1)**(1/self.decay_constant))
         out = self.weight[0, index]*x + self.weight[0, index]*decay_value*self.cache + self.bias[index]
@@ -68,17 +67,54 @@ class RowRepeatCausalLinear(Module):
         self.bias = Tensor.zeros([dim]) # init to zero
         self.decay_value = Tensor.ones([1])
         self.decay_constant = decay_constant
-        self.cache = torch.zeros([embedding_dim]) # TODO: initialize and send to shared mem via custom op
+        self.cache = Tensor.zeros([embedding_dim]) # TODO: initialize and send to shared mem via custom op
 
     def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
         # expects x in shape [B, E]
         self.weight = self.weight.to(x.device)
-        self.bias = self.bias.to(x.device);
+        self.bias = self.bias.to(x.device)
         self.decay_value = self.decay_value.to(x.device) 
         decay_value = (self.decay_value.clip(min=0.9, max=1)**(1/self.decay_constant))
         out = self.weight[0, index]*x + decay_value*self.cache + self.bias[index]
         self.cache = out - self.bias[index]
         return out
+
+class HeadedRepeatCausalLinear(nn.Module):
+    """
+    Mixed-headed repeat module for ParallelRepeatHeads
+    """
+    def __init__(self, dim: int, heads: int, head_dim=256, decay=False, decay_constant=1):
+        super().__init__()
+        self.weight = Tensor.ones([heads, dim])
+        self.bias = Tensor.zeros([heads, dim])
+        self.heads = heads
+        self.decay_value = Tensor.ones([2, 1]) # N.B. only one value used, for back compatability
+        self.decay_constant = decay_constant
+        global batch_size
+        self.cache = Tensor.zeros([batch_size, heads, head_dim])# first half of cache vectors are row repeat, second half are col repeat
+
+    def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
+        self.weight = self.weight.to(x.device)
+        self.bias = self.bias.to(x.device)
+        x = x.reshape([x.shape[0]//self.heads, x.shape[1], self.heads]) # reshapes (b h) e -> b e h
+        decay_value = (self.decay_value.clip(min=0.9, max=1)**(1/self.decay_constant))
+        # reshape cache to (b) e h, b is broadcasted in the next op if necessary
+        self.cache = self.cache.permute([0, 2, 1])
+        
+        # row computation and cache update
+        row_out = self.weight[self.heads//2:, index]*x[..., self.heads//2:] + decay_value[1]*self.cache[..., self.heads//2:]
+        row_out_cache = row_out
+
+        # col computation and cache update
+        col_out = self.weight[:self.heads//2, index]*x[...,:self.heads//2] + self.weight[:self.heads//2, index]*decay_value[1]*self.cache[..., :self.heads//2]
+        col_out_cache = col_out / self.weight[:self.heads//2, index]
+        self.cache = F.concat([row_out_cache, col_out_cache], axis=-1)
+        self.cache = self.cache.permute([0, 2, 1])
+        
+        output = F.concat([col_out, row_out], axis=-1)
+        output += self.bias[:, index]
+        output = output.reshape([x.shape[0]*self.heads, x.shape[1]])
+        return output
 
 class ParallelRepeatHeads(Module):
 
@@ -93,24 +129,26 @@ class ParallelRepeatHeads(Module):
         **kwargs
     ):
         # note that the hidden dim is by definition dim // n_heads
+        print ('parallel heads')
         self.n_heads = n_heads
-        self.in_proj = max.nn.Linear(dim, dim)
-        self.out_proj = max.nn.Linear(dim, dim)
-        self.mixer_heads = HeadedRepeatCausalLinear(seq_len, n_heads, decay=decay, decay_constant=seq_len//512)
+        if use_projections:
+            self.in_proj = max.nn.Linear(dim, dim)
+            self.out_proj = max.nn.Linear(dim, dim)
         self.use_projections = use_projections
+        self.mixer_heads = HeadedRepeatCausalLinear(seq_len, n_heads, head_dim=dim//n_heads, decay=decay, decay_constant=seq_len//512)
         self.head_dim = head_dim
     
     def forward(self, x:torch.Tensor, index: int) -> torch.Tensor:
         batch_dim = x.shape[0]
         if self.use_projections:
             x = self.in_proj(x)
-        projections = x.reshape(batch_dim * self.n_heads, self.head_dim) # rearrange(x, "b (h e) -> (b h) e", h=self.n_heads)
-        conv_projection = self.mixer_heads(projections, index, head_dim=hidden_dim)
-        output = conv_projection.reshape(batch_dim, n_heads * self.head_dim) # rearrange(conv_projection, "(b h) e -> b (h e)", h=self.n_heads)
+        projections = x.reshape([batch_dim * self.n_heads, self.head_dim]) # rearrange(x, "b (h e) -> (b h) e", h=self.n_heads)
+        conv_projection = self.mixer_heads(projections, index)
+        output = conv_projection.reshape([batch_dim, n_heads * self.head_dim]) # rearrange(conv_projection, "(b h) e -> b (h e)", h=self.n_heads)
         if self.use_projections:
             output = self.out_proj(output)
         return output
-
+    
 class MixedRepeatHeads(Module):
 
     def __init__(self, dim: int, seq_len: int, hidden_dim: int, n_heads: int, expanded_convs=False, decay=False, use_projections=True):
@@ -123,6 +161,7 @@ class MixedRepeatHeads(Module):
         self.hidden_dim = hidden_dim # TODO: replace mixer heads list with module list or sequential, as this is not assigned to device properly
         self.mixer_heads = max.nn.sequential.ModuleList(ColRepeatCausalLinear(seq_len, embedding_dim=hidden_dim, decay=decay, decay_constant=seq_len//512) for i in range(n_heads//2)) \
                          + max.nn.sequential.ModuleList(RowRepeatCausalLinear(seq_len, embedding_dim=hidden_dim, decay=decay, decay_constant=seq_len//512) for i in range(n_heads//2))
+         
         print (self.mixer_heads)
 
     def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
@@ -143,7 +182,6 @@ class MixedRepeatHeads(Module):
 
         return hidden_layer
 
-
 class LayerNorm(Module):
 
     def __init__(self, dim: DimLike, *, eps: float = 1e-5) -> None:
@@ -154,7 +192,6 @@ class LayerNorm(Module):
     def forward(self, x: Tensor) -> Tensor:
         normed_out = F.layer_norm(x, gamma=self.weight, beta=self.bias, epsilon=self.eps)
         return normed_out
-
 
 class MixerBlock(Module):
 
@@ -167,7 +204,7 @@ class MixerBlock(Module):
         parallel_heads=False, 
         use_projections=True
     ):
-        print ('here')
+        print ('Block initializing...')
         self.hidden_dim = hidden_dim
         self.seq_len = seq_len
         self.expansion_factor = expansion_factor
@@ -179,10 +216,9 @@ class MixerBlock(Module):
         # channel-mixing layer
         self.channel_in = max.nn.Linear(hidden_dim, hidden_dim * expansion_factor)
         self.channel_out = max.nn.Linear(hidden_dim * expansion_factor, hidden_dim)
-
         if heads is not None and heads > 0:
             if parallel_heads:
-                # flatd mixer layer
+                # flat mixer layer
                 self.token_mixing_layer = ParallelRepeatHeads(
                     hidden_dim,
                     seq_len, 
@@ -245,20 +281,15 @@ class RecurrentSRM(Module):
         self.seq_len = seq_len
         self.num_blocks = num_blocks
         self.input_layer = max.nn.Embedding(vocab_size, dim=hidden_dim)
-        self.mixer_blocks = nn.sequential.ModuleList(MixerBlock(
+        self.mixer_blocks = Sequential(*(MixerBlock(
                 hidden_dim, seq_len, heads=heads, mixed_heads=mixed_heads, decay=decay, parallel_heads=parallel_heads, use_projections=use_projections
-        ) for _ in range(num_blocks))
+        ) for _ in range(num_blocks)))
 
     def forward(self, input_ids, index: int):
-        print ('model forward pass started')
         index = int(input_ids.shape[-1])
         input_ids = input_ids[:, -1]
         x = self.input_layer(input_ids)
-        for i, block in enumerate(self.mixer_blocks):
-            x, _ = block((x, index))
-        # x, _ = self.mixer_blocks((x, index))
-
-        print ('model forward pass ended')
+        x, _ = self.mixer_blocks((x, index))
         return x
 
 class SRMLMHeadModel(Module):
@@ -295,8 +326,6 @@ class TotalModel(Module):
         logits = self.model2.lm_head(x)
         return logits
 
-device = driver.CPU()
-
 if __name__ == "__main__":
     load_dotenv()
     checkpoint_root = os.getenv('CHECKPOINT_ROOT')
@@ -306,8 +335,9 @@ if __name__ == "__main__":
     n_vocab =  len(tokenizer)
 
     dtype, device = defaults()
+    device = CPU()
     input_string = 'Four score and seven years ago, our'
-    batch_size = 1000
+    batch_size = 10
     input_tokens = tokenizer(input_string, return_tensors='pt').input_ids[:, 1].unsqueeze(1) # no BOS token
     input_tokens = input_tokens.repeat(batch_size, 1)
     length = torch.tensor([input_tokens.shape[1]])
@@ -316,7 +346,6 @@ if __name__ == "__main__":
     dim = 64
     layers = 2
     n_heads = 4
-    print (dtype)
 
     with default_device(CPU()), default_dtype(dtype):
         model = SRMLMHeadModel(
@@ -325,9 +354,9 @@ if __name__ == "__main__":
             tokenized_length, 
             layers, 
             heads=n_heads, 
-            mixed_heads=True, 
+            mixed_heads=True,
             decay=True, 
-            parallel_heads=False, 
+            parallel_heads=True, 
             use_projections=True
         )
     
@@ -345,34 +374,11 @@ if __name__ == "__main__":
 
     model = model.compile(token_type, length_type)
     print ('compiled')
-
-    with default_device(CPU()), default_dtype(dtype):
-        model2 = SRMLMHeadModel(
-            n_vocab, 
-            dim, 
-            tokenized_length, 
-            layers, 
-            heads=n_heads, 
-            mixed_heads=True, 
-            decay=True, 
-            parallel_heads=False, 
-            use_projections=True
-        )
-
-    model2 = model2.to(device)
-    model2 = model2.compile(token_type, length_type)
-    print ('compiled')
-
-    total_model = TotalModel(model1, model2)
-    total_model = totalModel.to(device)
-    total_model = total_model.comile(token_type, length_type)
-
     input_tensor = Tensor.constant(input_tokens, dtype=DType.int64, device=device)
     length = Tensor.constant(length, dtype=DType.int64, device=device)
-
     start = time.time()
     print ('Model compilation completed')
-    for i in range(50):
+    for i in range(20):
         output = model(input_tensor, length)
     end = time.time()
     print (f'Model throughput: {batch_size / (end - start)} t/s')
