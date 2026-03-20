@@ -198,7 +198,7 @@ if __name__ == "__main__":
     load_model(model, f"{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors")
     model = torch.compile(model)
     text ='''Four score and seven years ago, our'''
-    batch_size = 64000
+    batch_size = 6400
     input_ids = torch.tensor(tokenizer.encode(text)[1:]).repeat(batch_size, 1).to(device) # ignore bos token
     print (input_ids.shape)
     tokens_to_generate = 1000
