@@ -132,7 +132,7 @@ if __name__ == '__main__':
 		n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=False)
 
 	print (encoder)
-	safetensors.torch.load_model(encoder, f'{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_noprojs_k1_512_n16_c512_b32x4/checkpoint-200000/model.safetensors')
+	#safetensors.torch.load_model(encoder, f'{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_noprojs_k1_512_n16_c512_b32x4/checkpoint-200000/model.safetensors')
 	frozen_encoder = TruncatedModel(encoder, autoencoder=False)
 
 	compression = 1
@@ -161,14 +161,14 @@ if __name__ == '__main__':
 	print("training begun")
 	print(encoder)
 
-	batch_size = 32
+	batch_size = 4
 	n_devices = 4
 	# get number of devices (assumes that all visible devices are used for training)
 	if torch.cuda.is_available():
 		n_devices = torch.cuda.device_count()
 
 	# descriptive name for output
-	output_dir = f'{checkpoint_root}/fineweb_mixed_noproj_decay_information\
+	output_dir = f'{checkpoint_root}/fineweb_mixed_untrained_noproj_decay_information\
 _{dim}\
 _n{layers}\
 _c{tokenized_length}_b{batch_size}x{n_devices}'
@@ -187,7 +187,7 @@ _c{tokenized_length}_b{batch_size}x{n_devices}'
 		overwrite_output_dir=True,
 		save_safetensors=True,
 		max_steps=200000,
-		torch_compile=True
+	#	torch_compile=True
 	)
 
 	trainer = transformers.Trainer(
@@ -202,6 +202,7 @@ _c{tokenized_length}_b{batch_size}x{n_devices}'
 	if not os.path.isdir(output_dir): 
 		os.mkdir(output_dir) 
 	shutil.copy(code_path, output_dir) 
-	model.train()
-	trainer.train()
+	#model.train()
+	#trainer.train()
+	print (trainer.evaluate())
 

@@ -24,7 +24,7 @@ if __name__ == "__main__":
     tokenizer.pad_token = tokenizer.eos_token
     n_vocab = tokenizer.vocab_size
 
-    tokenized_length = 2048
+    tokenized_length = 4096
     dim = 512
     layers = 16
     n_heads = 8
@@ -43,7 +43,7 @@ if __name__ == "__main__":
     #load_model(model, f"{checkpoint_root}/fineweb_training/fineweb_llama_512_c1024/checkpoint-196000/model.safetensors")
     generation_config = GenerationConfig()
     text ='''Four score and seven years ago, our'''
-    tokens_to_generate = 2000
+    tokens_to_generate = 4000
     batch_size = 50
     input_ids = torch.tensor(tokenizer.encode(text)[1:]).repeat(batch_size, 1 ).to(device) # ignore bos token
     print (input_ids.shape)
