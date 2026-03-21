@@ -1,9 +1,11 @@
 import torch
 import re
 from trl import GRPOConfig, GRPOTrainer
+from transformers import AutoTokenizer, LlamaConfig
 from datasets import load_dataset, load_from_disk, Dataset
-from recurrent_srm_model import RecurrentMLPMixer
 from dual_srm import DualMLPMixer
+from dotenv import load_dotenv
+import os
 from transformers.generation import GenerationMixin, GenerationConfig
 
 class DualMixer(DualMLPMixer, GenerationMixin):
@@ -184,7 +186,7 @@ if __name__ == '__main__':
         optim = "adamw_torch",
         logging_steps = 1,
         per_device_train_batch_size = 1,
-        num_generations = 128, # Decrease if out of memory
+        num_generations = 4, # Decrease if out of memory
         max_prompt_length = max_prompt_length,
         max_completion_length = max_seq_length - max_prompt_length,
         num_train_epochs = 10, # Set to 1 for a full training run
