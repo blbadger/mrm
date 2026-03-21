@@ -184,7 +184,7 @@ if __name__ == "__main__":
     n_vocab = tokenizer.vocab_size
     print("Vocab size: ", n_vocab)
 
-    tokenized_length = 2048
+    tokenized_length = 1024
     dim = 1024
     layers = 16
     n_heads = 4
@@ -193,16 +193,17 @@ if __name__ == "__main__":
     model = RecurrentInference(
         n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
         mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True).float().to(device)
-    generation_config = GenerationConfig()
+    generation_config = GenerationConfig(config={'do_sample': True, 'temperature': 0.7, 'top_p': 0.9, 'max_new_tokens': 256})
+    stopping_criteria = tokenizer.encode('\n')
     print (model)
     #load_model(model, f"{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors")
     model = torch.compile(model)
-    text ='''Four score and seven years ago, our'''
-    batch_size = 32000
+    text ='''Four score and seven years ago, our forefathers, for the purpose of a more perfect union, sought'''
+    batch_size = 500
     input_ids = torch.tensor(tokenizer.encode(text)[1:]).repeat(batch_size, 1).to(device) # ignore bos token
     print (input_ids.shape)
-    tokens_to_generate = 2000
+    tokens_to_generate = 50
     streamer = TextStreamer(tokenizer, skip_prompt=False)
     start = time.time()
-    output_ids = model.generate(input_ids, max_length=len(input_ids[0]) + tokens_to_generate, generation_config=generation_config) #, streamer=streamer)
+    output_ids = model.generate(input_ids, max_length=len(input_ids[0]) + tokens_to_generate, generation_config=generation_config, use_cache=False) #, streamer=streamer)
     print (f'Example: {tokenizer.decode(output_ids[0])}, elapsed time: {time.time() - start}, t/s: {(tokens_to_generate * batch_size)/(time.time() - start)}')

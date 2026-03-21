@@ -516,8 +516,7 @@ class MixedRepeatHeads(nn.Module):
 
         self.hidden_dim = hidden_dim
         self.mixer_heads = nn.ModuleList(
-            [ColRepeatCausalLinear(seq_len, decay=decay, decay_constant=2) for i in range(n_heads//2)] + [RowRepeatCausalLinear(seq_len, decay=decay, decay_constant=2) for i in range(n_heads//2)] # TODO: both decay constants are seq_len//2
-        )
+            [ColRepeatCausalLinear(seq_len, decay=decay, decay_constant=seq_len//2) for i in range(n_heads//2)] + [RowRepeatCausalLinear(seq_len, decay=decay, decay_constant=seq_len//2) for i in range(n_heads//2)]         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         activations = []
@@ -794,9 +793,9 @@ if __name__ == "__main__":
     n_vocab = len(tokenizer)
     print("Vocab size: ", n_vocab)
 
-    tokenized_length = 512
-    dim = 1260
-    layers = 20
+    tokenized_length = 1024
+    dim = 1024
+    layers = 16
     n_heads = 4
     kernel= 1
 
@@ -808,9 +807,9 @@ if __name__ == "__main__":
     n_gpus = torch.cuda.device_count()
     total_batch_size = 64 #  128
     batch_size = total_batch_size // n_gpus
-    train_path = f"{data_root}/fineweb-edu-tokenized-train-c512"
-    test_path = f"{data_root}/fineweb-edu-tokenized-test-c512"
-    output_dir = f"{checkpoint_root}/fineweb_srm_scaling_h{n_heads}_mixed_decay_nonparallel_projs_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
+    train_path = f"{data_root}/finemath-4-tokenized-train-c1024-8k"
+    test_path = f"{data_root}/finemath-4-tokenized-test-c1024-8k"
+    output_dir = f"{checkpoint_root}/finemath_srm_h{n_heads}_mixed_decay_nonparallel_projs_{dim}_n{layers}_c512_b{batch_size}x{n_gpus}"
   
     datasets.config.IN_MEMORY_MAX_SIZE = 1e9
     train_dataset = load_from_disk(train_path, keep_in_memory=None)
@@ -824,7 +823,7 @@ if __name__ == "__main__":
         num_train_epochs=1,
         per_device_train_batch_size=batch_size,
         per_device_eval_batch_size=batch_size,
-        gradient_accumulation_steps=2,
+        gradient_accumulation_steps=1,
         warmup_steps=50,
         eval_steps=4000,
         save_steps=8000,
@@ -854,4 +853,5 @@ if __name__ == "__main__":
     shutil.copy(code_path, output_dir) 
 
     model.train()
-    trainer.train(output_dir + '/checkpoint-136000')
+    trainer.train()
+    #trainer.train(output_dir + '/checkpoint-136000')
