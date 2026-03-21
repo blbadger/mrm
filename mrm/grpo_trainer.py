@@ -173,7 +173,7 @@ if __name__ == '__main__':
 
     max_prompt_length = 720
 
-    output_dir = f'{checkpoint_root}/srm_grpo_128'
+    output_dir = f'{checkpoint_root}/gsm8k_srm_grpo_s128'
     training_args = GRPOConfig(
         learning_rate = 1e-4,
         adam_beta1 = 0.9,
