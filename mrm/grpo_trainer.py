@@ -1,6 +1,7 @@
 import torch
 import re
 from trl import GRPOConfig, GRPOTrainer
+from safetensors.torch import load_model
 from transformers import AutoTokenizer, LlamaConfig
 from datasets import load_dataset, load_from_disk, Dataset
 from dual_srm import DualMLPMixer
@@ -30,7 +31,6 @@ class DualMixer(DualMLPMixer, GenerationMixin):
     ):
         super().__init__(vocab_size, hidden_dim, seq_len, num_blocks, heads=heads, kernel=kernel, expanded_convs=expanded_convs,
             mixed_heads=mixed_heads, combined_heads=combined_heads, decay=decay, parallel_heads=parallel_heads, use_projections=use_projections)
-
         self._init_weights()
         self.generation_config = GenerationConfig()
         config  = {
@@ -43,11 +43,15 @@ class DualMixer(DualMLPMixer, GenerationMixin):
         self.config = LlamaConfig(**config)
         self.hidden_dim = hidden_dim
         self.n_heads = heads
+        self.seq_len
         self.main_input_name = 'input_ids'
         self._supports_cache_class = False
         self.cache_built = False
         self.device = self.output_layer.weight.device
-        self.counter = 0
+        self.warnings_issued={}
+    
+    def add_model_tags(self, tag):
+        print (tag)
 
     def can_generate(self):
         return True
@@ -62,7 +66,7 @@ class DualMixer(DualMLPMixer, GenerationMixin):
         for i in range(len(input_ids[0])-1):
             x = self.input_layer(input_ids[:, i])
             for block in self.mixer_blocks:
-                x = block(x, i)
+                x = block(x, i, True)
         self.cache_built = True
         return
 
@@ -72,15 +76,18 @@ class DualMixer(DualMLPMixer, GenerationMixin):
                 block.token_mixing_layer.mixer_heads[h].cache = torch.zeros(self.hidden_dim//self.n_heads).to('cuda') # only for mixed heads
 
     def forward(self, input_ids, labels=None, **kwargs):
-        if not self.cache_built and not self.training:
+        is_recurrent = input_ids.shape[1] < self.seq_len
+        if not self.cache_built and is_recurrent:
             self.build_cache(input_ids)
         index = input_ids.shape[1] - 1
-        input_ids = input_ids[:, -1] # last token only
+        if is_recurrent:
+            input_ids = input_ids[:, -1] # last token only
         
         # model's forward pass
         x = self.input_layer(input_ids)
+        print (self.training, f'input shape: {input_ids.shape}, x shape {x.shape}')
         for block in self.mixer_blocks:
-            x = block(x, index)
+            x = block(x, index, is_recurrent)
         logits = self.output_layer(x).unsqueeze(1)
         if labels is not None:
             return CausalLMOutput(loss=0, logits=logits)
@@ -117,6 +124,12 @@ def downsample_rewards(completions, num_samples = 16, **kwargs):
         pass
 
 
+def prepare_nshot(example, n_shot=3):
+    # n shot append and rename fields for rl
+    three_shot_prompt = '\n'.join([f"Question: {train_dataset[i]['question']} \nAnswer: {train_dataset[i]['answer']}" for i in range(n_shot)])
+    example['prompt'] = f"{three_shot_prompt}\n Question: {example['question']} \n Asnwer: "
+    return example
+
 if __name__ == '__main__':
     device = "cuda" if torch.cuda.is_available() else "cpu"
     load_dotenv()
@@ -126,7 +139,6 @@ if __name__ == '__main__':
     tokenizer.pad_token = tokenizer.eos_token
     n_vocab = len(tokenizer)
     print("Vocab size: ", n_vocab)
-    print (dataset[0])
 
     tokenized_length = 1024
     dim = 1024
@@ -134,15 +146,19 @@ if __name__ == '__main__':
     n_heads = 4
     kernel = 1
 
-    model = RouterModel(
+    model = DualMixer(
         n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
         mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True)
 
     dataset = load_dataset("openai/gsm8k", "main")
     train_dataset, eval_dataset = dataset['train'], dataset['test']
     print (train_dataset[0])
+    train_dataset = train_dataset.map(prepare_nshot, num_proc=16)
+    print (train_dataset[0])
+    eval_dataset = eval_dataset.map(prepare_nshot, num_proc=16)
     print (len(train_dataset))
-    model_path=''
+    model_path=f'{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
+    load_model(model, model_path)
 
     max_prompt_length = 720
 
@@ -156,10 +172,10 @@ if __name__ == '__main__':
         lr_scheduler_type = "cosine",
         optim = "adamw_torch",
         logging_steps = 1,
-        per_device_train_batch_size = 1,
-        num_generations = 4, # Decrease if out of memory
+        per_device_train_batch_size = 32,
+        num_generations = 128, # Decrease if out of memory
         max_prompt_length = max_prompt_length,
-        max_completion_length = max_seq_length - max_prompt_length,
+        max_completion_length = tokenized_length - max_prompt_length,
         num_train_epochs = 10, # Set to 1 for a full training run
         save_steps = 500,
         max_grad_norm = 0.9,

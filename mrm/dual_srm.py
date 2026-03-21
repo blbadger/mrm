@@ -62,6 +62,7 @@ class ColRepeatCausalLinear(nn.Module):
     def forward(self, x: torch.Tensor, index: int, recurrent: bool) -> torch.Tensor:
         if not recurrent:
             return self._parallel_forward(x)
+        self.cache = self.cache.to(x.device)
         decay_value = (torch.clip(self.decay_value, min=0.9, max=1)**(1/self.decay_constant)).to(x.device)
         out = self.weight[0, index]*x + self.weight[0, index]*decay_value*self.cache + self.bias[index]
         self.cache = (out - self.bias[index]) / self.weight[0, index] # cache update: factor out weight, remove bias
@@ -203,7 +204,6 @@ class KernelRepeatLinear(nn.Module):
         
         # column repeat kernel mixer
         super().__init__()
-
         self.weight = nn.Parameter(torch.randn(kernel, dim))
         self.bias = nn.Parameter(torch.zeros(dim))
         self.kernel = kernel
@@ -344,14 +344,14 @@ class MixedRepeatHeads(nn.Module):
             # pre-concatenated out projection
             for head in range(self.n_heads):
                 if self.use_projections:
-                    projection = self.proj_head[head](x, recurrent)
+                    projection = self.proj_head[head](x)
                     projection = rearrange(projection, "b t e -> b e t")
                 else:
                     projection = x[:, head*self.hidden_dim: (head+1)*self.hidden_dim, :]
                     if torch.is_autocast_enabled():
                         projection = projection.to(torch.float16)
 
-                conv_projection = self.mixer_heads[head](projection)
+                conv_projection = self.mixer_heads[head](projection, recurrent)
                 rearranged_conv = rearrange(conv_projection, "b e t -> b t e")
                 activations.append(rearranged_conv)
 
