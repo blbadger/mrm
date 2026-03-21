@@ -88,34 +88,7 @@ class DualMixer(DualMLPMixer, GenerationMixin):
             return CausalLMOutput(loss=0, logits=logits)
 
 
-def extract_hash_answer(text: str) -> str | None:
-    if "####" not in text:
-        return None
-    return text.split("####")[1].strip()
-
-def get_gsm8k_questions(split = "train") -> Dataset:
-    # 3 shot
-    data = load_dataset('openai/gsm8k', 'main')[split]
-    data = data.map(lambda x: { 
-        'prompt': [
-            {'role': 'system', 'content': SYSTEM_PROMPT},
-            {'role': 'user', 'content': x['question']}
-        ],
-        'answer': extract_hash_answer(x['answer']),
-        'database': 'yes'
-    }) 
-    return data 
-
-
 def output_check(predicted_output, ground_truth):
-    """
-    Check the output for execution accuracy.
-    Args:
-        output (str): The generated SQL query.
-        gold_sql (str): The ground truth SQL query.
-    Returns:
-        bool: True if the output is correct, False otherwise.
-    """
     cleaned_output = predicted_output.split('####')[1].strip(' ,!@#$%^&*')
     return res
 
@@ -127,10 +100,9 @@ def correctness_reward_func(prompts, completions, answer, database, **kwargs) ->
     print('-'*20, f"Question:\n{q}", f"\nAnswer:\n{answer[0]}", f"\nResponse:\n{responses[0]}", f"\nExtracted:\n{extracted_responses[0]}")
     return [1.0 if r == a else 0.0 for r, a in zip(extracted_responses, answer)]
 
-
 def format_reward_func(completions, **kwargs) -> list[float]:
     """Reward function that checks if the completion has a specific format."""
-    pattern = r"^<reasoning>\n.*?\n</reasoning>\n<answer>\n.*?\n</answer>\n$"
+    pattern = r"*?####*?"
     responses = [completion[0]["content"] for completion in completions]
     matches = [re.match(pattern, r) for r in responses]
     return [0.5 if match else 0.0 for match in matches]
@@ -154,7 +126,6 @@ if __name__ == '__main__':
     tokenizer.pad_token = tokenizer.eos_token
     n_vocab = len(tokenizer)
     print("Vocab size: ", n_vocab)
-    dataset = get_gsm8k_questions()
     print (dataset[0])
 
     tokenized_length = 1024
@@ -200,7 +171,7 @@ if __name__ == '__main__':
         model = model,
         processing_class = tokenizer,
         reward_funcs = [
-            execution_reward_func,
+            correctness_reward_func,
             format_reward_func
         ],
         args = training_args,
