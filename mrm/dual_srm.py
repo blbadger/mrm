@@ -119,6 +119,7 @@ class RowRepeatCausalLinear(nn.Module):
     def forward(self, x: torch.Tensor, index: int, recurrent: bool) -> torch.Tensor:
         if not recurrent:
             return self._parallel_forward(x)
+        self.cache = self.cache.to(x.device)
         # expects x in shape [B, E]
         decay_value = (torch.clip(self.decay_value, min=0.9, max=1)**(1/self.decay_constant)).to(x.device)
         out = self.weight[0, index]*x + decay_value*self.cache + self.bias[index]

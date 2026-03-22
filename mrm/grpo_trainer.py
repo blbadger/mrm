@@ -8,6 +8,7 @@ from dual_srm import DualMLPMixer
 from dotenv import load_dotenv
 import os
 from transformers.generation import GenerationMixin, GenerationConfig
+from transformers.modeling_outputs import CausalLMOutput
 
 class DualMixer(DualMLPMixer, GenerationMixin):
 
@@ -76,21 +77,25 @@ class DualMixer(DualMLPMixer, GenerationMixin):
                 block.token_mixing_layer.mixer_heads[h].cache = torch.zeros(self.hidden_dim//self.n_heads).to('cuda') # only for mixed heads
 
     def forward(self, input_ids, labels=None, **kwargs):
-        is_recurrent = input_ids.shape[1] < self.seq_len
+        is_recurrent = input_ids.shape < self.seq_len
         if not self.cache_built and is_recurrent:
             self.build_cache(input_ids)
         index = input_ids.shape[1] - 1
         if is_recurrent:
             input_ids = input_ids[:, -1] # last token only
-        
+        print (index, is_recurrent)
         # model's forward pass
         x = self.input_layer(input_ids)
-        print (self.training, f'input shape: {input_ids.shape}, x shape {x.shape}')
+        #print (self.training, f'input shape: {input_ids.shape}, x shape {x.shape}')
         for block in self.mixer_blocks:
             x = block(x, index, is_recurrent)
         logits = self.output_layer(x).unsqueeze(1)
         if labels is not None:
-            return CausalLMOutput(loss=0, logits=logits)
+            logits = logits.view(-1, self.vocab_size)
+            labels = labels.view(-1)
+            loss = self.loss_fn(logits, labels)
+            return loss, logits
+            return CausalLMOutput(loss=loss, logits=logits)
         else:
             return CausalLMOutput(loss=0, logits=logits)
 
