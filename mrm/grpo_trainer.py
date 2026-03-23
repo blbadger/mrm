@@ -44,7 +44,7 @@ class DualMixer(DualMLPMixer, GenerationMixin):
         self.config = LlamaConfig(**config)
         self.hidden_dim = hidden_dim
         self.n_heads = heads
-        self.seq_len
+        self.seq_len = seq_len
         self.main_input_name = 'input_ids'
         self._supports_cache_class = False
         self.cache_built = False
@@ -77,13 +77,12 @@ class DualMixer(DualMLPMixer, GenerationMixin):
                 block.token_mixing_layer.mixer_heads[h].cache = torch.zeros(self.hidden_dim//self.n_heads).to('cuda') # only for mixed heads
 
     def forward(self, input_ids, labels=None, **kwargs):
-        is_recurrent = input_ids.shape < self.seq_len
+        is_recurrent = input_ids.shape[1] < self.seq_len
         if not self.cache_built and is_recurrent:
             self.build_cache(input_ids)
         index = input_ids.shape[1] - 1
         if is_recurrent:
             input_ids = input_ids[:, -1] # last token only
-        print (index, is_recurrent)
         # model's forward pass
         x = self.input_layer(input_ids)
         #print (self.training, f'input shape: {input_ids.shape}, x shape {x.shape}')
@@ -100,39 +99,39 @@ class DualMixer(DualMLPMixer, GenerationMixin):
             return CausalLMOutput(loss=0, logits=logits)
 
 
-def output_check(predicted_output, ground_truth):
-    cleaned_output = predicted_output.split('####')[1].strip(' ,!@#$%^&*')
-    return res
+def output_extract(predicted_output):
+    cleaned_output = predicted_output.split('####')
+    if len(cleaned_output) > 1:
+        cleaned_output = cleaned_output[1].strip(' ,!@#$%^&*')
+    return cleaned_output
 
 # Reward functions
-def correctness_reward_func(prompts, completions, answer, database, **kwargs) -> list[float]:
-    responses = [completion[0]['content'] for completion in completions]
-    q = prompts[0][-1]['content']
-    extracted_responses = [extract_xml_answer(r) for r in responses]
-    print('-'*20, f"Question:\n{q}", f"\nAnswer:\n{answer[0]}", f"\nResponse:\n{responses[0]}", f"\nExtracted:\n{extracted_responses[0]}")
-    return [1.0 if r == a else 0.0 for r, a in zip(extracted_responses, answer)]
+def correctness_reward_func(prompts, completions, answer, **kwargs) -> list[float]:
+    extracted_responses = [output_extract(c) for c in completions]
+    extracted_answers = [output_extract(a) for a in answer]
+    #print('-'*20, f"Question:\n{prompts[0]}", f"\nAnswer:\n{answer[0]}", f"\nResponse:\n{completions[0]}", f"\nExtracted:\n{extracted_responses[0]}")
+    return [1.0 if r == a else 0.0 for r, a in zip(extracted_responses, extracted_answers)]
 
 def format_reward_func(completions, **kwargs) -> list[float]:
     """Reward function that checks if the completion has a specific format."""
-    pattern = r"*?####*?"
-    responses = [completion[0]["content"] for completion in completions]
-    matches = [re.match(pattern, r) for r in responses]
+    pattern = r"####"
+    matches = [pattern in c for c in completions]
     return [0.5 if match else 0.0 for match in matches]
 
 def length_reward(completions, **kwargs):
     """For testing a trivial reward maximization"""
-    responses = [completion[0]["content"] for completion in completions]
+    responses = completions 
     return [0.001*len(response) for response in responses]
 
 def downsample_rewards(completions, num_samples = 16, **kwargs):
     for response in responses:
         pass
 
-
 def prepare_nshot(example, n_shot=3):
     # n shot append and rename fields for rl
     three_shot_prompt = '\n'.join([f"Question: {train_dataset[i]['question']} \nAnswer: {train_dataset[i]['answer']}" for i in range(n_shot)])
-    example['prompt'] = f"{three_shot_prompt}\n Question: {example['question']} \n Asnwer: "
+    example['prompt'] = f"{three_shot_prompt}\n Question: {example['question']} \n Answer: "
+    example['cleaned_answer'] = output_extract(example['answer'])
     return example
 
 if __name__ == '__main__':
@@ -177,11 +176,11 @@ if __name__ == '__main__':
         lr_scheduler_type = "cosine",
         optim = "adamw_torch",
         logging_steps = 1,
-        per_device_train_batch_size = 32,
-        num_generations = 128, # Decrease if out of memory
+        per_device_train_batch_size = 8,
+        num_generations = 8, 
         max_prompt_length = max_prompt_length,
         max_completion_length = tokenized_length - max_prompt_length,
-        num_train_epochs = 10, # Set to 1 for a full training run
+        num_train_epochs = 10,
         save_steps = 500,
         max_grad_norm = 0.9,
         report_to = "none",

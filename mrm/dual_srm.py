@@ -352,7 +352,7 @@ class MixedRepeatHeads(nn.Module):
                     if torch.is_autocast_enabled():
                         projection = projection.to(torch.float16)
 
-                conv_projection = self.mixer_heads[head](projection, recurrent)
+                conv_projection = self.mixer_heads[head](projection, index, recurrent)
                 rearranged_conv = rearrange(conv_projection, "b e t -> b t e")
                 activations.append(rearranged_conv)
 
