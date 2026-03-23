@@ -75,6 +75,7 @@ class DualMixer(DualMLPMixer, GenerationMixin):
         for block in self.mixer_blocks:
             for h in range(len(block.token_mixing_layer.mixer_heads)):
                 block.token_mixing_layer.mixer_heads[h].cache = torch.zeros(self.hidden_dim//self.n_heads).to('cuda') # only for mixed heads
+        self.cache_built = False
 
     def forward(self, input_ids, labels=None, **kwargs):
         is_recurrent = input_ids.shape[1] < self.seq_len
@@ -85,7 +86,6 @@ class DualMixer(DualMLPMixer, GenerationMixin):
             input_ids = input_ids[:, -1] # last token only
         # model's forward pass
         x = self.input_layer(input_ids)
-        #print (self.training, f'input shape: {input_ids.shape}, x shape {x.shape}')
         for block in self.mixer_blocks:
             x = block(x, index, is_recurrent)
         logits = self.output_layer(x).unsqueeze(1)
@@ -105,12 +105,12 @@ def answer_extract(answer):
     return cleaned_output
 
 def output_extract(predicted_output):
-    output = re.findall("(-?[$0-9.,]{2,})|(-?[0-9]+)", predicted_output)[-1]
+    output = re.findall("(-?[$0-9.,]{2,})|(-?[0-9]+)", predicted_output)
     if output:
         output = output[-1]
     outs = []
     for i, out in enumerate(output):
-        if isinstance(out, tuple): 
+        if isinstance(out, tuple) and len(out) > 1: 
            outs.append((out[0] if out[0] else out[1]).strip(' %$@!*,.'))
         else:
            outs.append(out)

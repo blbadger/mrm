@@ -559,11 +559,6 @@ class DualMLPMixer(nn.Module):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
     def forward(self, input_ids, index=0, labels=None, **kwargs):
-        if self.training:
-            recurrent = False
-        else:
-            recurrent = True
-
         labels = labels[:, 1:].contiguous()
         x = self.input_layer(input_ids)
         for block in self.mixer_blocks:
