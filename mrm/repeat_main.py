@@ -853,5 +853,5 @@ if __name__ == "__main__":
     shutil.copy(code_path, output_dir) 
 
     model.train()
-    trainer.train()
-    #trainer.train(output_dir + '/checkpoint-136000')
+    #trainer.train()
+    trainer.train(output_dir + '/checkpoint-88000')
