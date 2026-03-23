@@ -98,12 +98,23 @@ class DualMixer(DualMLPMixer, GenerationMixin):
         else:
             return CausalLMOutput(loss=0, logits=logits)
 
-
-def output_extract(predicted_output):
-    cleaned_output = predicted_output.split('####')
+def answer_extract(answer):
+    cleaned_output = answer.split('####')
     if len(cleaned_output) > 1:
         cleaned_output = cleaned_output[1].strip(' ,!@#$%^&*')
     return cleaned_output
+
+def output_extract(predicted_output):
+    output = re.findall("(-?[$0-9.,]{2,})|(-?[0-9]+)", predicted_output)[-1]
+    if output:
+        output = output[-1]
+    outs = []
+    for i, out in enumerate(output):
+        if isinstance(out, tuple): 
+           outs.append((out[0] if out[0] else out[1]).strip(' %$@!*,.'))
+        else:
+           outs.append(out)
+    return outs
 
 # Reward functions
 def correctness_reward_func(prompts, completions, answer, **kwargs) -> list[float]:
@@ -176,8 +187,8 @@ if __name__ == '__main__':
         lr_scheduler_type = "cosine",
         optim = "adamw_torch",
         logging_steps = 1,
-        per_device_train_batch_size = 8,
-        num_generations = 8, 
+        per_device_train_batch_size = 256,
+        num_generations = 1024, 
         max_prompt_length = max_prompt_length,
         max_completion_length = tokenized_length - max_prompt_length,
         num_train_epochs = 10,
