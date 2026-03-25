@@ -90,9 +90,11 @@ class DualMixer(DualMLPMixer, GenerationMixin):
             x = block(x, index, is_recurrent)
         logits = self.output_layer(x).unsqueeze(1)
         if labels is not None:
-            logits = logits.view(-1, self.vocab_size)
-            labels = labels.view(-1)
-            loss = self.loss_fn(logits, labels)
+            shift_logits = logits[:, :-1].contiguous()
+            shift_labels = labels[:, 1:].contiguous()
+            shift_logits = shift_logits.view(-1, self.vocab_size)
+            shift_labels = shift_labels.view(-1)
+            loss = self.loss_fn(shift_logits, shift_labels)
             return loss, logits
             return CausalLMOutput(loss=loss, logits=logits)
         else:
@@ -134,11 +136,7 @@ def length_reward(completions, **kwargs):
     responses = completions 
     return [0.001*len(response) for response in responses]
 
-def downsample_rewards(completions, num_samples = 16, **kwargs):
-    for response in responses:
-        pass
-
-def prepare_nshot(example, n_shot=3):
+def prepare_nshot(example, n_shot=1):
     # n shot append and rename fields for rl
     three_shot_prompt = '\n'.join([f"Question: {train_dataset[i]['question']} \nAnswer: {train_dataset[i]['answer']}" for i in range(n_shot)])
     example['prompt'] = f"{three_shot_prompt}\n Question: {example['question']} \n Answer: "
@@ -165,6 +163,8 @@ if __name__ == '__main__':
         n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
         mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True)
 
+    print (model)
+
     dataset = load_dataset("openai/gsm8k", "main")
     train_dataset, eval_dataset = dataset['train'], dataset['test']
     print (train_dataset[0])
@@ -173,41 +173,42 @@ if __name__ == '__main__':
     eval_dataset = eval_dataset.map(prepare_nshot, num_proc=16)
     print (len(train_dataset))
     model_path=f'{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
+    #model_path=f'{checkpoint_root}/finemath_h4_mixed_decay_nonparallel_projs_k1_1024_n16_c512_b32x4/checkpoint-200000/model.safetensors'
     load_model(model, model_path)
 
-    max_prompt_length = 720
+    max_prompt_length = tokenized_length - 128
 
-    output_dir = f'{checkpoint_root}/gsm8k_srm_grpo_s128'
+    output_dir = f'{checkpoint_root}/gsm8k_srm_grpo_s1024_b8x4'
     training_args = GRPOConfig(
         learning_rate = 1e-4,
-        adam_beta1 = 0.9,
-        adam_beta2 = 0.99,
         weight_decay = 0.1,
         warmup_ratio = 0.1,
         lr_scheduler_type = "cosine",
         optim = "adamw_torch",
         logging_steps = 1,
-        per_device_train_batch_size = 256,
-        num_generations = 1024, 
+        per_device_train_batch_size=1024,
+        gradient_accumulation_steps=1,
+        num_generations = 512, 
         max_prompt_length = max_prompt_length,
         max_completion_length = tokenized_length - max_prompt_length,
-        num_train_epochs = 10,
-        save_steps = 500,
-        max_grad_norm = 0.9,
+        num_train_epochs = 5,
+        save_steps = 50,
+        max_grad_norm = 0.1,
         report_to = "none",
         output_dir = output_dir,
+        fp16=True,
+        torch_compile=True
     )
-
+	
     trainer = GRPOTrainer(
         model = model,
         processing_class = tokenizer,
         reward_funcs = [
             correctness_reward_func,
-            format_reward_func
         ],
         args = training_args,
         train_dataset = train_dataset,
         eval_dataset = eval_dataset
     )
-
-    trainer.train()
+    #training_args.save_json(output_dir + '/checkpoint-1250')
+    trainer.train(output_dir + '/checkpoint-1250')

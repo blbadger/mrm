@@ -493,7 +493,11 @@ class MixerBlock(nn.Module):
 
         res = x
         x = self.token_norm(x)
+        if not recurrent:
+            x = x.transpose(1, 2)
         x = self.token_mixing_layer(x, index, recurrent)
+        if not recurrent:
+            x = x.transpose(1, 2)
         x = x + res
         return x
 
