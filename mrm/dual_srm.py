@@ -563,18 +563,18 @@ class DualMLPMixer(nn.Module):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
     def forward(self, input_ids, index=0, labels=None, **kwargs):
-        labels = labels[:, 1:].contiguous()
+        if labels is not None:
+            shift_labels = labels[:, 1:].contiguous()
         x = self.input_layer(input_ids)
         for block in self.mixer_blocks:
             x = block(x, index, recurrent)
         logits = self.output_layer(x)
-        logits = logits[:, :-1].contiguous()
+        shift_logits = logits[:, :-1].contiguous()
 
         if labels is not None:
-            logits = logits.view(-1, self.vocab_size)
-            labels = labels.view(-1)
-
-            loss = self.loss_fn(logits, labels)
+            shift_logits = shift_logits.view(-1, self.vocab_size)
+            shift_labels = shift_labels.view(-1)
+            loss = self.loss_fn(shift_logits, shift_labels)
             return loss, logits
         else:
             return logits

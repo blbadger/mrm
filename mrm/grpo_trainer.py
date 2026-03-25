@@ -98,7 +98,6 @@ class DualMixer(DualMLPMixer, GenerationMixin):
             shift_logits = shift_logits.view(-1, self.vocab_size)
             shift_labels = shift_labels.view(-1)
             loss = self.loss_fn(shift_logits, shift_labels)
-            #return loss, logits
             return CausalLMOutput(loss=loss, logits=logits)
         else:
             return CausalLMOutput(loss=0, logits=logits)
@@ -143,7 +142,7 @@ def length_reward(completions, **kwargs):
 def prepare_nshot(example, n_shot=1):
     # n shot append and rename fields for rl
     three_shot_prompt = '\n'.join([f"Question: {train_dataset[i]['question']} \nAnswer: {train_dataset[i]['answer']}" for i in range(n_shot)])
-    example['prompt'] = f"{three_shot_prompt}\n Question: {example['question']} \n Answer:"
+    example['prompt'] = f"{three_shot_prompt}\n Question: {example['question']} \n Answer: |@|"
     example['cleaned_answer'] = output_extract(example['answer'])
     return example
 
@@ -176,8 +175,8 @@ if __name__ == '__main__':
     print (train_dataset[0])
     eval_dataset = eval_dataset.map(prepare_nshot, num_proc=16)
     print (len(train_dataset))
-    model_path=f'{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
-    #model_path=f'{checkpoint_root}/gsm8k_SFT_srm_c1024/checkpoint-700/model.safetensors'
+    #model_path=f'{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
+    model_path=f'{checkpoint_root}/gsm8k_SFT_srm_c1024_testrain/checkpoint-2200/model.safetensors'
     load_model(model, model_path)
 
     max_prompt_length = tokenized_length - 128
@@ -212,7 +211,7 @@ if __name__ == '__main__':
             correctness_reward_func,
         ],
         args = training_args,
-        train_dataset = train_dataset,
+        train_dataset = eval_dataset,
         eval_dataset = eval_dataset
     )
     #training_args.save_json(output_dir + '/checkpoint-1250')

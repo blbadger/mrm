@@ -35,8 +35,6 @@ class SFTModel(MLPMixer):
             mixed_heads=mixed_heads, combined_heads=combined_heads, decay=decay, parallel_heads=parallel_heads, use_projections=use_projections)
 
     def forward(self, input_ids, labels=None, **kwargs):
-        if labels is not None:
-            shift_labels = labels[:, 1:].contiguous()
         # forward pass
         x = self.input_layer(input_ids)
         for block in self.mixer_blocks:
@@ -44,6 +42,7 @@ class SFTModel(MLPMixer):
         logits = self.output_layer(x)
 
         if labels is not None:
+            shift_labels = labels[:, 1:].contiguous()
             shift_logits = logits[:, :-1].contiguous().view(-1, self.vocab_size)
             shift_labels = shift_labels.view(-1)
             loss = self.loss_fn(shift_logits, shift_labels)
@@ -54,7 +53,7 @@ class SFTModel(MLPMixer):
 
 def prepare_nshot(example, n_shot=3):
     three_shot_prompt = '\n'.join([f"Question: {train_dataset[i]['question']} \nAnswer: {train_dataset[i]['answer']}" for i in range(n_shot)])
-    example['prompt'] = f"{three_shot_prompt}\n Question: {example['question']} \nAnswer:"
+    example['prompt'] = f"{three_shot_prompt}\n Question: {example['question']} \nAnswer : "
     example['completion'] = example['answer']
     example['text'] = example['prompt'] + '|@|' + example['completion']
     return example
@@ -85,7 +84,7 @@ if __name__ == '__main__':
 
     print (model)
     dataset = load_dataset("openai/gsm8k", "main")
-    train_dataset, eval_dataset = dataset['test'], dataset['test']
+    train_dataset, eval_dataset = dataset['test'], dataset['test'] # positive control
     train_dataset = train_dataset.map(prepare_nshot, num_proc=16).remove_columns(['prompt', 'completion'])
     eval_dataset = eval_dataset.map(prepare_nshot, num_proc=16).remove_columns(['prompt', 'completion'])
     
@@ -94,7 +93,7 @@ if __name__ == '__main__':
     model_path=f'{checkpoint_root}/finemath_srm_h4_mixed_decay_nonparallel_projs_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
     load_model(model, model_path)
     print ('pretrained model loaded')
-    response_template = '|@|'
+    response_template = 'Answer : '
     collator = DataCollatorForCompletionOnlyLM(response_template, tokenizer=tokenizer, pad_to_multiple_of=1024)
 
     output_dir = f'{checkpoint_root}/gsm8k_SFT_srm_c1024_testrain'
