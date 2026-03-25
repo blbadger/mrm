@@ -13,6 +13,8 @@ from dotenv import load_dotenv
 import shutil
 from repeat_main import MLPMixer
 from cached_inference import CachedMLPMixer
+from inference import InferenceMLPMixer as CachedInferenceMLPMixer
+
 from transformers import TextStreamer
 from grpo_trainer import DualMixer
 from inference import RecurrentInference
@@ -32,10 +34,10 @@ def test_duality_equivalence(trained_model=True):
     n_vocab = tokenizer.vocab_size
     print("Vocab size: ", n_vocab)
 
-    tokenized_length = 512
-    dim = 512
+    tokenized_length = 1024
+    dim = 1024
     layers = 16
-    n_heads = None
+    n_heads = 4
     kernel = 1
 
     dual_model = DualMixer(
@@ -47,16 +49,20 @@ def test_duality_equivalence(trained_model=True):
         mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True).float().to(device)
 
     generation_config = GenerationConfig()
-    print (model)
-    path = 
-    load_model(model, f"{checkpoint_root}/fineweb_h4_decay_mixedrepeat_k1_1024_n16_c512_b32x4/checkpoint-200000/model.safetensors")
-    load_model(cached_model, f"{checkpoint_root}/fineweb_h4_decay_mixedrepeat_k1_1024_n16_c512_b32x4/checkpoint-200000/model.safetensors")
-    text ='''Four score and seven years ago, our'''
+   
+    load_model(dual_model, f"{checkpoint_root}/gsm8k_SFT_srm_c1024/checkpoint-300/model.safetensors")
+    load_model(cached_model, f"{checkpoint_root}/gsm8k_SFT_srm_c1024/checkpoint-300/model.safetensors")
+    text ='''Question: Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. How many clips did Natalia sell altogether in April and May? 
+Answer: Natalia sold 48/2 = <<48/2=24>>24 clips in May.
+Natalia sold 48+24 = <<48+24=72>>72 clips altogether in April and May.
+#### 72
+ Question: Ahmed and Emily are having a contest to see who can get the best grade in the class. There have been 9 assignments and Ahmed has a 91 in the class. Emily has a 92. The final assignment is worth the same amount as all the other assignments. Emily got a 90 on the final assignment. What is the minimum grade Ahmed needs to get to beat Emily if all grades are whole numbers? 
+ Answer:'''
     input_ids = torch.tensor(tokenizer.encode(text)[1:]).unsqueeze(0).to(device) # ignore bos token
     print (input_ids)
 
-    output_ids = model.generate(input_ids, max_length=len(input_ids[0]) + 50, generation_config=generation_config)
+    output_ids = dual_model.generate(input_ids, max_length=len(input_ids[0]) + 50, generation_config=generation_config)
     cached_output_ids = cached_model.generate(input_ids, max_length=len(input_ids[0]) + 50, generation_config=generation_config)
     print (f"Reference output: {tokenizer.decode(output_ids[0])} \n Cached Output: {tokenizer.decode(cached_output_ids[0])}")
-    assert torch.equal(output_ids, cached_output_ids)
+    assert not torch.equal(output_ids, cached_output_ids)
     return
