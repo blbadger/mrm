@@ -54,6 +54,9 @@ class DualMixer(DualMLPMixer, GenerationMixin):
     def add_model_tags(self, tag):
         print (tag)
 
+    def gradient_checkpointing_enable(self, *args, **kwargs):
+        pass
+
     def can_generate(self):
         return True
 
@@ -95,7 +98,7 @@ class DualMixer(DualMLPMixer, GenerationMixin):
             shift_logits = shift_logits.view(-1, self.vocab_size)
             shift_labels = shift_labels.view(-1)
             loss = self.loss_fn(shift_logits, shift_labels)
-            return loss, logits
+            #return loss, logits
             return CausalLMOutput(loss=loss, logits=logits)
         else:
             return CausalLMOutput(loss=0, logits=logits)
@@ -122,7 +125,8 @@ def output_extract(predicted_output):
 def correctness_reward_func(prompts, completions, answer, **kwargs) -> list[float]:
     extracted_responses = [output_extract(c) for c in completions]
     extracted_answers = [output_extract(a) for a in answer]
-    #print('-'*20, f"Question:\n{prompts[0]}", f"\nAnswer:\n{answer[0]}", f"\nResponse:\n{completions[0]}", f"\nExtracted:\n{extracted_responses[0]}")
+    print('='*60, f"Question:\n{prompts[0]}", f"\nAnswer:\n{answer[0]}\n",'-'*50, f"\nResponse:\n{completions[0]}", f"\nExtracted:\n{extracted_responses[0]}\n")
+    #print('='*60, f"Question:\n{prompts[1]}", f"\nAnswer:\n{answer[1]}\n",'-'*50, f"\nResponse:\n{completions[1]}", f"\nExtracted:\n{extracted_responses[1]}\n")
     return [1.0 if r == a else 0.0 for r, a in zip(extracted_responses, extracted_answers)]
 
 def format_reward_func(completions, **kwargs) -> list[float]:
@@ -139,7 +143,7 @@ def length_reward(completions, **kwargs):
 def prepare_nshot(example, n_shot=1):
     # n shot append and rename fields for rl
     three_shot_prompt = '\n'.join([f"Question: {train_dataset[i]['question']} \nAnswer: {train_dataset[i]['answer']}" for i in range(n_shot)])
-    example['prompt'] = f"{three_shot_prompt}\n Question: {example['question']} \n Answer: "
+    example['prompt'] = f"{three_shot_prompt}\n Question: {example['question']} \n Answer:"
     example['cleaned_answer'] = output_extract(example['answer'])
     return example
 
@@ -162,7 +166,7 @@ if __name__ == '__main__':
     model = DualMixer(
         n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
         mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True)
-
+    model.is_gradient_checkpointing = False
     print (model)
 
     dataset = load_dataset("openai/gsm8k", "main")
@@ -173,7 +177,7 @@ if __name__ == '__main__':
     eval_dataset = eval_dataset.map(prepare_nshot, num_proc=16)
     print (len(train_dataset))
     model_path=f'{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
-    #model_path=f'{checkpoint_root}/finemath_h4_mixed_decay_nonparallel_projs_k1_1024_n16_c512_b32x4/checkpoint-200000/model.safetensors'
+    #model_path=f'{checkpoint_root}/gsm8k_SFT_srm_c1024/checkpoint-700/model.safetensors'
     load_model(model, model_path)
 
     max_prompt_length = tokenized_length - 128
@@ -186,10 +190,10 @@ if __name__ == '__main__':
         lr_scheduler_type = "cosine",
         optim = "adamw_torch",
         logging_steps = 1,
-        per_device_train_batch_size=1024,
+        per_device_train_batch_size=16,
         gradient_accumulation_steps=1,
-        num_generations = 512, 
-        max_prompt_length = max_prompt_length,
+        num_generations = 16, 
+        #max_prompt_length = max_prompt_length,
         max_completion_length = tokenized_length - max_prompt_length,
         num_train_epochs = 5,
         save_steps = 50,
@@ -197,8 +201,9 @@ if __name__ == '__main__':
         report_to = "none",
         output_dir = output_dir,
         fp16=True,
-        torch_compile=True
-    )
+        torch_compile=True, 
+        temperature = 0.001,
+)
 	
     trainer = GRPOTrainer(
         model = model,
@@ -211,4 +216,4 @@ if __name__ == '__main__':
         eval_dataset = eval_dataset
     )
     #training_args.save_json(output_dir + '/checkpoint-1250')
-    trainer.train(output_dir + '/checkpoint-1250')
+    trainer.train()

@@ -56,6 +56,7 @@ def prepare_nshot(example, n_shot=3):
     three_shot_prompt = '\n'.join([f"Question: {train_dataset[i]['question']} \nAnswer: {train_dataset[i]['answer']}" for i in range(n_shot)])
     example['prompt'] = f"{three_shot_prompt}\n Question: {example['question']} \nAnswer:"
     example['completion'] = example['answer']
+    example['text'] = example['prompt'] + '|@|' + example['completion']
     return example
 
 def formatting_prompts_func(example):
@@ -78,17 +79,16 @@ if __name__ == '__main__':
     n_heads = 4
     kernel = 1
 
-    model = InferenceMLPMixer(
+    model = SFTModel(
         n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
         mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True).to(device)
 
     print (model)
     dataset = load_dataset("openai/gsm8k", "main")
     train_dataset, eval_dataset = dataset['train'], dataset['test']
-    print (train_dataset[0])
-    train_dataset = train_dataset.map(prepare_nshot, num_proc=16)
-    print (train_dataset[0])
-    eval_dataset = eval_dataset.map(prepare_nshot, num_proc=16)
+    train_dataset = train_dataset.map(prepare_nshot, num_proc=16).remove_columns(['prompt', 'completion'])
+    eval_dataset = eval_dataset.map(prepare_nshot, num_proc=16).remove_columns(['prompt', 'completion'])
+    
     print (len(train_dataset))
     # model_path=f'{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
     model_path=f'{checkpoint_root}/finemath_srm_h4_mixed_decay_nonparallel_projs_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
@@ -107,14 +107,15 @@ if __name__ == '__main__':
         logging_steps = 25,
         per_device_train_batch_size=16,
         max_seq_length = tokenized_length,
-        num_train_epochs = 10,
+        num_train_epochs = 50,
         save_steps = 100,
         eval_steps = 50,
+        eval_strategy = 'steps',
         max_grad_norm = 0.1,
         report_to = "none",
         output_dir = output_dir,
         fp16=True,
-        #torch_compile=True
+        torch_compile=True
     )
 
     config =training_args
@@ -124,9 +125,8 @@ if __name__ == '__main__':
             processing_class=tokenizer,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            data_collator=collator 
+            data_collator=collator,
        )
     
-    print (trainer.args.accelerator_config)
     model.train()
     trainer.train()
