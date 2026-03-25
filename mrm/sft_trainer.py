@@ -10,7 +10,6 @@ import os
 from transformers.generation import GenerationMixin, GenerationConfig
 from transformers.modeling_outputs import CausalLMOutput
 
-
 def prepare_nshot(example, n_shot=3):
     three_shot_prompt = '\n'.join([f"Question: {train_dataset[i]['question']} \nAnswer: {train_dataset[i]['answer']}" for i in range(n_shot)])
     example['prompt'] = f"{three_shot_prompt}\n Question: {example['question']} \nAnswer: "
@@ -35,7 +34,7 @@ if __name__ == '__main__':
 
     model = DualMixer(
         n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
-        mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True)
+        mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True).to(device)
 
     print (model)
     dataset = load_dataset("openai/gsm8k", "main")
@@ -49,7 +48,7 @@ if __name__ == '__main__':
     model_path=f'{checkpoint_root}/finemath_srm_h4_mixed_decay_nonparallel_projs_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
     load_model(model, model_path)
     print ('pretrained model loaded')
-
+    accelerator_config = {'gradient_accumulation_kwargs': None}
     output_dir = f'{checkpoint_root}/gsm8k_SFT_srm_c1024'
     training_args = SFTConfig(
         learning_rate = 1e-4,
@@ -59,8 +58,7 @@ if __name__ == '__main__':
         optim = "adamw_torch",
         logging_steps = 25,
         per_device_train_batch_size=16,
-        gradient_accumulation_steps=1,
-        max_length = tokenized_length,
+        max_seq_length = tokenized_length,
         num_train_epochs = 10,
         save_steps = 100,
         eval_steps = 50,
@@ -68,16 +66,18 @@ if __name__ == '__main__':
         report_to = "none",
         output_dir = output_dir,
         fp16=True,
-        torch_compile=True
+        #torch_compile=True
     )
 
-    config = SFTConfig
+    config =training_args
     trainer = SFTTrainer(
             model=model,
             args=config,
+            processing_class=tokenizer,
             train_dataset=train_dataset,
-            eval_dataset=test_dataset,
+            eval_dataset=eval_dataset,
         )
     
+    print (trainer.args.accelerator_config)
     model.train()
     trainer.train()
