@@ -10,6 +10,48 @@ import os
 from transformers.generation import GenerationMixin, GenerationConfig
 from transformers.modeling_outputs import CausalLMOutput
 
+
+class SFTModel(MLPMixer):
+
+     def __init__(
+        self,
+        vocab_size: int,
+        hidden_dim: int,
+        seq_len: int,
+        num_blocks: int,
+        heads=None,
+        kernel=1,
+        expanded_convs=False,
+        copy=False,        
+        mixed_heads=False,
+        combined_heads=False,
+        decay=False,
+        parallel_heads=False,
+        use_projections=True,
+        dropout_layer=False,
+        **kwargs):
+
+        super().__init__(vocab_size, hidden_dim, seq_len, num_blocks, heads=heads, kernel=kernel, expanded_convs=expanded_convs,
+            mixed_heads=mixed_heads, combined_heads=combined_heads, decay=decay, parallel_heads=parallel_heads, use_projections=use_projections)
+
+    def forward(self, input_ids, labels=None, **kwargs):
+        if labels is not None:
+            shift_labels = labels[:, 1:].contiguous()
+        # forward pass
+        x = self.input_layer(input_ids)
+        for block in self.mixer_blocks:
+            x = block(x)
+        logits = self.output_layer(x)
+
+        if labels is not None:
+            shift_logits = logits[:, :-1].contiguous().view(-1, self.vocab_size)
+            shift_labels = shift_labels.view(-1)
+            loss = self.loss_fn(shift_logits, shift_labels)
+            return CausalLMOutput(loss=loss, logits=logits)
+        else:
+            return CausalLMOutput(loss=0., logits=logits)
+
+
 def prepare_nshot(example, n_shot=3):
     three_shot_prompt = '\n'.join([f"Question: {train_dataset[i]['question']} \nAnswer: {train_dataset[i]['answer']}" for i in range(n_shot)])
     example['prompt'] = f"{three_shot_prompt}\n Question: {example['question']} \nAnswer:"
