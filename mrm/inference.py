@@ -83,15 +83,16 @@ class InferenceMLPMixer(CachedMLPMixer, GenerationMixin):
 		if not self.cache_built:
 			self.build_cache(input_ids)
 		if labels is not None:
-			labels = labels[:, 1:].contiguous()
+			shift_labels = labels[:, 1:].contiguous()
 		# model's forward pass
 		x = self.input_layer(input_ids)
 		for block in self.mixer_blocks:
 			x = block(x)
 		logits = self.output_layer(x)
-		logits = logits[:, -1].unsqueeze(1).contiguous()
+		shift_logits = logits[:, -1].unsqueeze(1).contiguous()
 		if labels is not None:
-			return CausalLMOutput(loss=0, logits=logits)
+			loss = self.loss_fn(shift_logits, shift_labels)
+			return CausalLMOutput(loss=loss, logits=logits)
 		else:
 			return CausalLMOutput(loss=0, logits=logits)
 

@@ -1,10 +1,10 @@
 import torch
 import re
-from trl import SFTTrainer, SFTConfig
+from trl import SFTTrainer, SFTConfig, DataCollatorForCompletionOnlyLM
 from safetensors.torch import load_model
 from transformers import AutoTokenizer, LlamaConfig
 from datasets import load_dataset, load_from_disk, Dataset
-from grpo_trainer import DualMixer
+from repeat_main import MLPMixer
 from dotenv import load_dotenv
 import os
 from transformers.generation import GenerationMixin, GenerationConfig
@@ -12,9 +12,13 @@ from transformers.modeling_outputs import CausalLMOutput
 
 def prepare_nshot(example, n_shot=3):
     three_shot_prompt = '\n'.join([f"Question: {train_dataset[i]['question']} \nAnswer: {train_dataset[i]['answer']}" for i in range(n_shot)])
-    example['prompt'] = f"{three_shot_prompt}\n Question: {example['question']} \nAnswer: "
+    example['prompt'] = f"{three_shot_prompt}\n Question: {example['question']} \nAnswer:"
     example['completion'] = example['answer']
     return example
+
+def formatting_prompts_func(example):
+    output_text = example['prompt'] + '|@|' + example['completion']
+    return output_text
 
 if __name__ == '__main__':
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -32,7 +36,7 @@ if __name__ == '__main__':
     n_heads = 4
     kernel = 1
 
-    model = DualMixer(
+    model = InferenceMLPMixer(
         n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
         mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True).to(device)
 
@@ -48,7 +52,9 @@ if __name__ == '__main__':
     model_path=f'{checkpoint_root}/finemath_srm_h4_mixed_decay_nonparallel_projs_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
     load_model(model, model_path)
     print ('pretrained model loaded')
-    accelerator_config = {'gradient_accumulation_kwargs': None}
+    response_template = '|@|'
+    collator = DataCollatorForCompletionOnlyLM(response_template, tokenizer=tokenizer, pad_to_multiple_of=1024)
+
     output_dir = f'{checkpoint_root}/gsm8k_SFT_srm_c1024'
     training_args = SFTConfig(
         learning_rate = 1e-4,
@@ -76,7 +82,8 @@ if __name__ == '__main__':
             processing_class=tokenizer,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-        )
+            data_collator=collator 
+       )
     
     print (trainer.args.accelerator_config)
     model.train()
