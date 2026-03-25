@@ -13,7 +13,7 @@ from transformers.modeling_outputs import CausalLMOutput
 
 class SFTModel(MLPMixer):
 
-     def __init__(
+    def __init__(
         self,
         vocab_size: int,
         hidden_dim: int,
