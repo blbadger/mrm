@@ -183,7 +183,7 @@ if __name__ == '__main__':
 
     output_dir = f'{checkpoint_root}/gsm8k_srm_grpo_s1024_b8x4'
     training_args = GRPOConfig(
-        learning_rate = 1e-4,
+        learning_rate = 2e-5,
         weight_decay = 0.1,
         warmup_ratio = 0.1,
         lr_scheduler_type = "cosine",
@@ -194,7 +194,7 @@ if __name__ == '__main__':
         num_generations = 512, 
         #max_prompt_length = max_prompt_length,
         max_completion_length = tokenized_length - max_prompt_length,
-        num_train_epochs = 5,
+        num_train_epochs = 10,
         save_steps = 50,
         max_grad_norm = 0.1,
         report_to = "none",
