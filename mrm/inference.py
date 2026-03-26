@@ -132,6 +132,7 @@ class RecurrentInference(RecurrentMLPMixer, GenerationMixin):
 		self._supports_cache_class = False
 		self.cache_built = False
 		self.device = self.output_layer.weight.device
+		self.n_heads = heads
 		if dropout_layer:
 			# overwrite original dropout layer with dropout included
 			for i in range(len(self.mixer_blocks)):
@@ -155,6 +156,11 @@ class RecurrentInference(RecurrentMLPMixer, GenerationMixin):
 				x = block(x, i)
 		self.cache_built = True
 		return
+	def clear_cache(self):
+		for block in self.mixer_blocks:
+			for h in range(len(block.token_mixing_layer.mixer_heads)):
+				block.token_mixing_layer.mixer_heads[h].cache = torch.zeros(self.hidden_dim//self.n_heads).to('cuda') # only for mixed heads
+				self.cache_built = False
 
 	def forward(self, input_ids, labels=None, **kwargs):
 		if not self.cache_built:

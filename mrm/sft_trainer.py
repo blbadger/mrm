@@ -53,13 +53,13 @@ class SFTModel(MLPMixer):
 
 def prepare_nshot(example, n_shot=3):
     three_shot_prompt = '\n'.join([f"Question: {train_dataset[i]['question']} \nAnswer: {train_dataset[i]['answer']}" for i in range(n_shot)])
-    example['prompt'] = f"{three_shot_prompt}\n Question: {example['question']} \nAnswer : "
+    example['prompt'] = f"{three_shot_prompt}\n Question: {example['question']} \nAnswer :"
     example['completion'] = example['answer']
-    example['text'] = example['prompt'] + '|@|' + example['completion']
+    example['text'] = example['prompt'] +'||' + example['completion']
     return example
 
 def formatting_prompts_func(example):
-    output_text = example['prompt'] + '|@|' + example['completion']
+    output_text = example['prompt'] + example['completion']
     return output_text
 
 if __name__ == '__main__':
@@ -84,19 +84,19 @@ if __name__ == '__main__':
 
     print (model)
     dataset = load_dataset("openai/gsm8k", "main")
-    train_dataset, eval_dataset = dataset['test'], dataset['test'] # positive control
+    train_dataset, eval_dataset = dataset['train'], dataset['test'] # positive control
     train_dataset = train_dataset.map(prepare_nshot, num_proc=16).remove_columns(['prompt', 'completion'])
     eval_dataset = eval_dataset.map(prepare_nshot, num_proc=16).remove_columns(['prompt', 'completion'])
     
     print (len(train_dataset))
-    # model_path=f'{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
-    model_path=f'{checkpoint_root}/finemath_srm_h4_mixed_decay_nonparallel_projs_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
+    model_path=f'{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
+    #model_path=f'{checkpoint_root}/finemath_srm_h4_mixed_decay_nonparallel_projs_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
     load_model(model, model_path)
     print ('pretrained model loaded')
-    response_template = '|@|'
+    response_template = '||'
     collator = DataCollatorForCompletionOnlyLM(response_template, tokenizer=tokenizer, pad_to_multiple_of=1024)
 
-    output_dir = f'{checkpoint_root}/gsm8k_SFT_srm_c1024_testrain'
+    output_dir = f'{checkpoint_root}/gsm8k_SFT_srm_c1024'
     training_args = SFTConfig(
         learning_rate = 1e-4,
         weight_decay = 0.1,
@@ -124,7 +124,7 @@ if __name__ == '__main__':
             processing_class=tokenizer,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            #data_collator=collator,
+            data_collator=collator,
        )
     
     model.train()

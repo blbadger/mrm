@@ -21,6 +21,7 @@ import time
 warnings.simplefilter(action='ignore', category=UserWarning)
 from grpo_trainer import DualMixer
 from naive_inference import InferenceMLPMixer as SlowInferenceMixer
+from colorama import init, Fore, Back, Style
 
 class InferenceMLPMixer(CachedMLPMixer, GenerationMixin):
 
@@ -120,13 +121,14 @@ if __name__ == "__main__":
     n_heads = 4
     kernel = 1
 
-    model = InferenceMLPMixer(
+    model = RecurrentInference(
         n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
         mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True).float().to(device)
 
-    load_model(model, f'{checkpoint_root}/gsm8k_pcontrol_srm_h4_mixed_decay_nonparallel_projs_1024_n16_c512_b16x4/checkpoint-1000/model.safetensors')
-    generation_config = GenerationConfig(config={'do_sample': False, 'temperature': 0., 'max_new_tokens': 256})
-    # generation_config = GenerationConfig(config={'do_sample': True, 'temperature': 0.7, 'top_p': 0.9, 'max_new_tokens': 256})
+    load_model(model, f'{checkpoint_root}/gsm8k_SFT_srm_c1024/checkpoint-1700/model.safetensors')
+    #generation_config = GenerationConfig(config={'do_sample': False, 'temperature': 0., 'max_new_tokens': 256})
+    generation_config = GenerationConfig(config={'do_sample': True, 'temperature': 0.7, 'top_p': 0.9, 'max_new_tokens': 256})
+
     dataset = load_dataset("openai/gsm8k", "main")
     train_dataset, test_dataset = dataset['train'], dataset['test']
     train_dataset = train_dataset.map(prepare_nshot, num_proc=16)
@@ -137,12 +139,17 @@ if __name__ == "__main__":
     for i in range(5):
 	    text =test_dataset[i]['prompt']
 	    answer = test_dataset[i]['answer']
-	    batch_size = 50
+	    batch_size = 1
 	    input_ids = torch.tensor(tokenizer.encode(text)[1:]).repeat(batch_size, 1).to(device) # ignore bos token
-	    print (input_ids.shape)
+	    print (Style.BRIGHT, input_ids.shape)
 	    tokens_to_generate = 128
-	    streamer = TextStreamer(tokenizer, skip_prompt=False)
+	    streamer = TextStreamer(tokenizer, skip_prompt=True)
 	    start = time.time()
-	    output_ids = model.generate(input_ids, max_length=len(input_ids[0]) + tokens_to_generate, generation_config=generation_config, use_cache=False) 
-	    print (f'Input: {text}\nOutput: {tokenizer.decode(output_ids[0])}\nTarget:{answer}')
+	   
+	    print (Fore.RED, f'Input: {text}')
+	    print (Fore.WHITE)
+	    output_ids = model.generate(input_ids, max_length=len(input_ids[0]) + tokens_to_generate, do_sample=True, temperature=0.7, top_p=0.9, generation_config=generation_config, use_cache=False, streamer=streamer) 
+	    model.clear_cache()
+	    #print (Fore.GREEN, f'Output: {tokenizer.decode(output_ids[0])}')
+	    #print (Fore.BLUE, f'\nTarget:{answer}')
 

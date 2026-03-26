@@ -517,7 +517,7 @@ class MixedRepeatHeads(nn.Module):
 
         self.hidden_dim = hidden_dim
         self.mixer_heads = nn.ModuleList(
-            [ColRepeatCausalLinear(seq_len, decay=decay, decay_constant=seq_len//2) for i in range(n_heads//2)] + [RowRepeatCausalLinear(seq_len, decay=decay, decay_constant=seq_len//2) for i in range(n_heads//2)]         )
+            [ColRepeatCausalLinear(seq_len, decay=decay, decay_constant=seq_len//512) for i in range(n_heads//2)] + [RowRepeatCausalLinear(seq_len, decay=decay, decay_constant=seq_len//512) for i in range(n_heads//2)]         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         activations = []
@@ -814,7 +814,7 @@ if __name__ == "__main__":
     model = MLPMixer(
         n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True)
    # count_parameters(model)
-    model_path=f'{checkpoint_root}/finemath_srm_h4_mixed_decay_nonparallel_projs_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
+    model_path=f'{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
     load_model(model, model_path)
     
     n_gpus = torch.cuda.device_count()
