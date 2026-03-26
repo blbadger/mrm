@@ -79,7 +79,7 @@ class InferenceMLPMixer(CachedMLPMixer, GenerationMixin):
 		for block in self.mixer_blocks:
 			x = block(x)
 		logits = self.output_layer(x)
-		shift_logits = logits[:, -1].unsqueeze(1).contiguous()
+		logits = logits[:, -1].unsqueeze(1).contiguous()
 		if labels is not None:
 			loss = self.loss_fn(shift_logits, shift_labels)
 			return CausalLMOutput(loss=loss, logits=logits)
