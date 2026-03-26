@@ -120,12 +120,12 @@ if __name__ == "__main__":
     n_heads = 4
     kernel = 1
 
-    model = SlowInferenceMixer(
+    model = InferenceMLPMixer(
         n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
         mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True).float().to(device)
 
     load_model(model, f'{checkpoint_root}/gsm8k_pcontrol_srm_h4_mixed_decay_nonparallel_projs_1024_n16_c512_b16x4/checkpoint-1000/model.safetensors')
-    generation_config = GenerationConfig(config={'do_sample': True, 'temperature': 0.7, 'top_p': 0.9, 'max_new_tokens': 256})
+    generation_config = GenerationConfig(config={'do_sample': False, 'temperature': 0., 'max_new_tokens': 256})
     # generation_config = GenerationConfig(config={'do_sample': True, 'temperature': 0.7, 'top_p': 0.9, 'max_new_tokens': 256})
     dataset = load_dataset("openai/gsm8k", "main")
     train_dataset, test_dataset = dataset['train'], dataset['test']
@@ -135,7 +135,7 @@ if __name__ == "__main__":
     #load_model(model, f"{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors")
     model = torch.compile(model)
     for i in range(5):
-	    text =test_dataset[i]['text'][:100]
+	    text =test_dataset[i]['prompt']
 	    answer = test_dataset[i]['answer']
 	    batch_size = 50
 	    input_ids = torch.tensor(tokenizer.encode(text)[1:]).repeat(batch_size, 1).to(device) # ignore bos token
