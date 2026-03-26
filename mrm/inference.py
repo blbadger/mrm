@@ -70,7 +70,7 @@ class InferenceMLPMixer(CachedMLPMixer, GenerationMixin):
 
 	def count_params(self):
 		return sum(p.numel() for p in self.parameters() if p.requires_grad)
-	
+
 	def build_cache(self, input_ids):
 		for i in range(1, len(input_ids[0])):
 			x = self.input_layer(input_ids[:, :i])
@@ -94,6 +94,7 @@ class InferenceMLPMixer(CachedMLPMixer, GenerationMixin):
 			return CausalLMOutput(loss=0, logits=logits)
 		else:
 			return CausalLMOutput(loss=0, logits=logits)
+
 
 class RecurrentInference(RecurrentMLPMixer, GenerationMixin):
 
@@ -192,17 +193,16 @@ if __name__ == "__main__":
     model = RecurrentInference(
         n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
         mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True).float().to(device)
-    generation_config = GenerationConfig(config={'do_sample': True, 'temperature': 0.7, 'top_p': 0.9, 'max_new_tokens': 256})
-    stopping_criteria = tokenizer.encode('\n')
+    generation_config = GenerationConfig()
     print (model)
-    #load_model(model, f"{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors")
+    load_model(model, f"{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors")
     model = torch.compile(model)
-    text ='''Four score and seven years ago, our forefathers, for the purpose of a more perfect union, sought'''
-    batch_size = 500
+    text ='''Four score and seven years ago, our'''
+    batch_size = 64000
     input_ids = torch.tensor(tokenizer.encode(text)[1:]).repeat(batch_size, 1).to(device) # ignore bos token
     print (input_ids.shape)
-    tokens_to_generate = 50
+    tokens_to_generate = 1000
     streamer = TextStreamer(tokenizer, skip_prompt=False)
     start = time.time()
-    output_ids = model.generate(input_ids, max_length=len(input_ids[0]) + tokens_to_generate, generation_config=generation_config, use_cache=False) #, streamer=streamer)
+    output_ids = model.generate(input_ids, max_length=len(input_ids[0]) + tokens_to_generate, generation_config=generation_config) #, streamer=streamer)
     print (f'Example: {tokenizer.decode(output_ids[0])}, elapsed time: {time.time() - start}, t/s: {(tokens_to_generate * batch_size)/(time.time() - start)}')
