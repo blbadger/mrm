@@ -139,10 +139,10 @@ def length_reward(completions, **kwargs):
     responses = completions 
     return [0.001*len(response) for response in responses]
 
-def prepare_nshot(example, n_shot=1):
+def prepare_nshot(example, n_shot=3):
     # n shot append and rename fields for rl
     three_shot_prompt = '\n'.join([f"Question: {train_dataset[i]['question']} \nAnswer: {train_dataset[i]['answer']}" for i in range(n_shot)])
-    example['prompt'] = f"{three_shot_prompt}\n Question: {example['question']} \n Answer: |@|"
+    example['prompt'] = f"{three_shot_prompt}\n Question: {example['question']} \n Answer:"
     example['cleaned_answer'] = output_extract(example['answer'])
     return example
 
