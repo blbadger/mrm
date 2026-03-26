@@ -1,24 +1,14 @@
 import torch
-import torch.nn as nn
-from einops import rearrange
-import transformers
-from transformers import AutoTokenizer, LlamaConfig
-from transformers.modeling_outputs import CausalLMOutput
-from transformers.generation import GenerationMixin, GenerationConfig
-import datasets
-from datasets import load_from_disk
+import re
+from trl import GRPOConfig, GRPOTrainer
 from safetensors.torch import load_model
-import os
+from transformers import AutoTokenizer, LlamaConfig
+from datasets import load_dataset, load_from_disk, Dataset
+from dual_srm import DualMLPMixer
 from dotenv import load_dotenv
-import shutil
-from repeat_main import MLPMixer
-from cached_inference import CachedMLPMixer
-from recurrent_inference import RecurrentMLPMixer
-from transformers import TextStreamer
-import warnings
-import time
-warnings.simplefilter(action='ignore', category=UserWarning)
-
+import os
+from transformers.generation import GenerationMixin, GenerationConfig
+from transformers.modeling_outputs import CausalLMOutput
 
 class DualMixer(DualMLPMixer, GenerationMixin):
 
@@ -76,20 +66,6 @@ class DualMixer(DualMLPMixer, GenerationMixin):
     def _is_stateful(self):
         return False
 
-    def save_cache(self, cache_store):
-    	cache_dict = 
-    	for block in self.mixer_blocks:
-            for h in range(len(block.token_mixing_layer.mixer_heads)):
-                cache_store[f'{token_mixing_layer},{h}'] = block.token_mixing_layer.mixer_heads[h].cache
-        return
-
-    def load_cache(self, cache_store):
-    	cache_dict = 
-    	for block in self.mixer_blocks:
-            for h in range(len(block.token_mixing_layer.mixer_heads)):
-                block.token_mixing_layer.mixer_heads[h].cache = cache_store[f'{token_mixing_layer},{h}']
-        return
-
     def build_cache(self, input_ids):
         for i in range(len(input_ids[0])-1):
             x = self.input_layer(input_ids[:, i])
@@ -144,13 +120,42 @@ def output_extract(predicted_output):
            outs.append(out)
     return outs
 
-if __name__ == "__main__":
+# Reward functions
+def correctness_filter(prompts, completions, answer, max_chosen=64, **kwargs) -> list[float]:
+    extracted_responses = [output_extract(c) for c in completions]
+    extracted_answers = [answer_extract(a) for a in answer]
+    good_outputs = []
+    for r, a in zip(extracted_responses, extracted_answers):
+        if r == a:
+            good_outputs.append([r, a])
+    return good_outputs[:max_chosen]
+
+def gen_and_filter_inputs(prompts, answer, **kwargs):
+    generation_config = {'do_sample': True, 'top_p':0.9, 'temperature':0.7}
+    completions = model.generate(inputs, generation_config=generation_config)
+    good_pairs = correctness_filter(prompts, completions, answer)
+    goot_prompts, good_completions = zip(*good_pairs)[0], zip(*good_pairs)[1]
+    return good_prompts, good_completions
+
+def prepare_nshot(example, n_shot=3):
+    three_shot_prompt = '\n'.join([f"Question: {train_dataset[i]['question']} \nAnswer: {train_dataset[i]['answer']}" for i in range(n_shot)])
+    example['prompt'] = f"{three_shot_prompt}\n Question: {example['question']} \nAnswer :"
+    example['completion'] = example['answer']
+    example['text'] = example['prompt'] +'|' + example['completion']
+    return example
+
+def formatting_prompts_func(example):
+    output_text = example['prompt'] + example['completion']
+    return output_text
+
+if __name__ == '__main__':
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     load_dotenv()
     checkpoint_root = os.getenv('CHECKPOINT_ROOT')
     data_root = os.getenv('DATA_ROOT')
     tokenizer = AutoTokenizer.from_pretrained(f"{data_root}/tokenizer_fineweb_8k")
     tokenizer.pad_token = tokenizer.eos_token
-    n_vocab = tokenizer.vocab_size
+    n_vocab = len(tokenizer)
     print("Vocab size: ", n_vocab)
 
     tokenized_length = 1024
@@ -159,21 +164,55 @@ if __name__ == "__main__":
     n_heads = 4
     kernel = 1
 
-    model = RecurrentInference(
+    model = SFTModel(
         n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
-        mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True).float().to(device)
+        mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True).to(device)
 
-    generation_config = GenerationConfig(config={'do_sample': True, 'temperature': 0.7, 'top_p': 0.9, 'max_new_tokens': 256})
-    stopping_criteria = tokenizer.encode('\n')
     print (model)
-    #load_model(model, f"{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors")
-    model = torch.compile(model)
-    text ='''Four score and seven years ago, our forefathers, for the purpose of a more perfect union, sought'''
-    batch_size = 500
-    input_ids = torch.tensor(tokenizer.encode(text)[1:]).repeat(batch_size, 1).to(device) # ignore bos token
-    print (input_ids.shape)
-    tokens_to_generate = 50
-    streamer = TextStreamer(tokenizer, skip_prompt=False)
-    start = time.time()
-    output_ids = model.generate(input_ids, max_length=len(input_ids[0]) + tokens_to_generate, generation_config=generation_config, use_cache=False) #, streamer=streamer)
-    print (f'Example: {tokenizer.decode(output_ids[0])}, elapsed time: {time.time() - start}, t/s: {(tokens_to_generate * batch_size)/(time.time() - start)}')
+    dataset = load_dataset("openai/gsm8k", "main")
+    train_dataset, eval_dataset = dataset['train'], dataset['test'] # positive control
+    train_dataset = train_dataset.map(prepare_nshot, num_proc=16).remove_columns(['prompt', 'completion'])
+    eval_dataset = eval_dataset.map(prepare_nshot, num_proc=16).remove_columns(['prompt', 'completion'])
+    
+    print (len(train_dataset))
+    model_path=f'{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
+    #model_path=f'{checkpoint_root}/finemath_srm_h4_mixed_decay_nonparallel_projs_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
+    load_model(model, model_path)
+    print ('pretrained model loaded')
+    response_template = '|'
+    collator = DataCollatorForCompletionOnlyLM(response_template, tokenizer=tokenizer, pad_to_multiple_of=1024)
+
+    output_dir = f'{checkpoint_root}/gsm8k_SFT_srm_c1024'
+    training_args = SFTConfig(
+        learning_rate = 1e-4,
+        weight_decay = 0.1,
+        warmup_ratio = 0.1,
+        lr_scheduler_type = "cosine",
+        optim = "adamw_torch",
+        logging_steps = 25,
+        per_device_train_batch_size=16,
+        max_seq_length = tokenized_length,
+        num_train_epochs = 500,
+        save_steps = 100,
+        eval_steps = 50,
+        eval_strategy = 'steps',
+        max_grad_norm = 0.1,
+        report_to = "none",
+        output_dir = output_dir,
+        fp16=True,
+        torch_compile=True
+    )
+
+    config =training_args
+    trainer = SFTTrainer(
+            model=model,
+            args=config,
+            processing_class=tokenizer,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            data_collator=collator,
+            formatting_func=gen_and_filter_inputs
+        )
+    
+    model.train()
+    trainer.train()
