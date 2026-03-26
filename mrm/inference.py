@@ -70,22 +70,30 @@ class InferenceMLPMixer(CachedMLPMixer, GenerationMixin):
 
 	def count_params(self):
 		return sum(p.numel() for p in self.parameters() if p.requires_grad)
+	
+	def build_cache(self, input_ids):
+		for i in range(1, len(input_ids[0])):
+			x = self.input_layer(input_ids[:, :i])
+			for block in self.mixer_blocks:
+				x = block(x)
+		self.cache_built = True
+		return	
 
 	def forward(self, input_ids, labels=None, **kwargs):
+		if not self.cache_built:
+			self.build_cache(input_ids)
 		if labels is not None:
-			shift_labels = labels[:, 1:].contiguous()
+			labels = labels[:, 1:].contiguous()
 		# model's forward pass
 		x = self.input_layer(input_ids)
 		for block in self.mixer_blocks:
 			x = block(x)
 		logits = self.output_layer(x)
-		shift_logits = logits[:, -1].unsqueeze(1).contiguous()
+		logits = logits[:, -1].unsqueeze(1).contiguous()
 		if labels is not None:
-			loss = self.loss_fn(shift_logits, shift_labels)
-			return CausalLMOutput(loss=loss, logits=logits)
+			return CausalLMOutput(loss=0, logits=logits)
 		else:
 			return CausalLMOutput(loss=0, logits=logits)
-
 
 class RecurrentInference(RecurrentMLPMixer, GenerationMixin):
 

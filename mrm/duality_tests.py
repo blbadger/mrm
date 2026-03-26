@@ -58,6 +58,7 @@ Natalia sold 48+24 = <<48+24=72>>72 clips altogether in April and May.
 #### 72
  Question: Ahmed and Emily are having a contest to see who can get the best grade in the class. There have been 9 assignments and Ahmed has a 91 in the class. Emily has a 92. The final assignment is worth the same amount as all the other assignments. Emily got a 90 on the final assignment. What is the minimum grade Ahmed needs to get to beat Emily if all grades are whole numbers? 
  Answer:'''
+    text = 'Four score and seven years ago, '
     input_ids = torch.tensor(tokenizer.encode(text)[1:]).unsqueeze(0).to(device) # ignore bos token
     print (input_ids)
 
