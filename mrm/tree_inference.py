@@ -79,11 +79,12 @@ class DualMixer(DualMLPMixer, GenerationMixin):
     def _is_stateful(self):
         return False
 
-    def save_cache(self, cache_store):
+    def get_cache(self):
+        cache_store = {}
     	for block in self.mixer_blocks:
             for h in range(len(block.token_mixing_layer.mixer_heads)):
                 cache_store[f'{block},{h}'] = block.token_mixing_layer.mixer_heads[h].cache
-        return
+        return cache_store
 
     def load_cache(self, cache_store):
     	for block in self.mixer_blocks:
@@ -146,68 +147,23 @@ def predict_next_nodes(policy_model, node, n_taken=2):
     for index in top_indices:
         # make new child node
         new_id = uuid.uuid4()
-        node = {new_id: {'token': index, 'value': []}}
-        
+        node.children.append(new_id)
+        new_node = {new_id: {'token': index, 'value': None, 'is_leaf': True, 'parent': node.key, 'cache_store':policy_model.get_cache(), 'children': []}}
     return top_indices
 
 def tree_backup(tree):
-    # use 1/0 values in leaf nodes to assign values to others
-    """
-    Propagate values from leaf nodes up to their parents recursively.
+    # Algorithm: find leaves, back up each leaf value to root, accumulate
+    # expects leaves to have values
+    for node in tree:
+        if node.is_leaf:
+            leaf_value = node.value
+            # back up value
+            while node.parent:
+                tree[node.parent].append(leaf_value)
+                node = node.parent
+    for node in tree:
+        if node.value = sum(node.value) / len(node.value)
     
-    Args:
-        tree: Dictionary mapping node IDs to node dictionaries.
-              Each node has: 'token', 'value', 'parent', 'children', 'id', 'is_leaf', 'cache_store'
-    
-    Algorithm:
-        1. Find all leaf nodes (nodes with no children or is_leaf=True)
-        2. Append each leaf's value to its parent's value list
-        3. Mark processed leaves as non-leaves
-        4. Repeat until all nodes are processed
-    """
-    # Continue until no more leaf nodes to process
-    while True:
-        # Find current leaf nodes
-        leaf_nodes = []
-        for node_id, node in tree.items():
-            # A node is a leaf if it has no children or all children have been processed
-            if node.get('is_leaf', False) or (not node.get('children') or len(node.get('children', [])) == 0):
-                # Check if this leaf has already been processed (has values from children)
-                if node.get('is_leaf', True):  # Only process actual leaves
-                    leaf_nodes.append(node_id)
-        
-        # If no leaf nodes found, we're done
-        if not leaf_nodes:
-            break
-        
-        # Process each leaf node
-        for leaf_id in leaf_nodes:
-            leaf_node = tree[leaf_id]
-            parent_id = leaf_node.get('parent')
-            
-            # If this leaf has a parent, append its value to parent's values list
-            if parent_id is not None and parent_id in tree:
-                parent_node = tree[parent_id]
-                if 'values' not in parent_node:
-                    parent_node['values'] = []
-                parent_node['values'].append(leaf_node.get('value', 0))
-            
-            # Mark this node as processed by setting is_leaf to False
-            leaf_node['is_leaf'] = False
-        
-        # Check if any nodes became new leaves (all their children processed)
-        for node_id, node in tree.items():
-            if node.get('children'):
-                # Check if all children have been processed
-                all_children_processed = all(
-                    not tree[child_id].get('is_leaf', False)
-                    for child_id in node['children']
-                    if child_id in tree
-                )
-                # If all children processed and this node hasn't been marked as leaf yet
-                if all_children_processed and node.get('is_leaf', False) == False:
-                    # This node becomes a new leaf for the next iteration
-                    node['is_leaf'] = True
     return tree
 
 def test_correctness(completions, answer, **kwargs) -> list[float]:
@@ -236,8 +192,7 @@ def get_token_values(tree):
         if node['is_leaf']:
             output = []
             while node.parent:
-                values = node['value']
-                value = sum(values) / len(values) # mean accumulation
+                values = node['value'] # assumes that values have already been mean accumulated
                 output.append(value)
                 node = node.parent
             in_order_values = output.reverse()
@@ -263,11 +218,7 @@ def assign_leaf_node_values(tree, answer):
     evaluation_dict = get_evaluations(output_dict, answer)
     for key, val in evaluation_dict.items():
         tree[key]['value'] = val['value']
-        tree[key]['']
-
-
-
-
+    return tree
 
 def answer_extract(answer):
     cleaned_output = answer.split('####')
