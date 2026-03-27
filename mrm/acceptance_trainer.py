@@ -1,14 +1,16 @@
 import torch
 import re
-from trl import GRPOConfig, GRPOTrainer
+from trl import SFTTrainer, SFTConfig, DataCollatorForCompletionOnlyLM
 from safetensors.torch import load_model
 from transformers import AutoTokenizer, LlamaConfig
 from datasets import load_dataset, load_from_disk, Dataset
-from dual_srm import DualMLPMixer
+from repeat_main import MLPMixer
 from dotenv import load_dotenv
 import os
 from transformers.generation import GenerationMixin, GenerationConfig
 from transformers.modeling_outputs import CausalLMOutput
+from dual_mixer import DualMLPMixer
+from transformers import TrainerCallback
 
 class DualMixer(DualMLPMixer, GenerationMixin):
 
@@ -121,7 +123,7 @@ def output_extract(predicted_output):
     return outs
 
 # Reward functions
-def correctness_filter(prompts, completions, answer, max_chosen=64, **kwargs) -> list[float]:
+def correctness_filter(prompts, completions, answer, max_chosen=64, **kwargs):
     extracted_responses = [output_extract(c) for c in completions]
     extracted_answers = [answer_extract(a) for a in answer]
     good_outputs = []
@@ -130,23 +132,57 @@ def correctness_filter(prompts, completions, answer, max_chosen=64, **kwargs) ->
             good_outputs.append([r, a])
     return good_outputs[:max_chosen]
 
-def gen_and_filter_inputs(prompts, answer, **kwargs):
-    generation_config = {'do_sample': True, 'top_p':0.9, 'temperature':0.7}
-    completions = model.generate(inputs, generation_config=generation_config)
-    good_pairs = correctness_filter(prompts, completions, answer)
-    goot_prompts, good_completions = zip(*good_pairs)[0], zip(*good_pairs)[1]
+def filter_inputs(prompts, completions, answers, **kwargs):
+    good_pairs = correctness_filter(prompts, completions, answers)
+    good_prompts, good_completions = zip(*good_pairs)[0], zip(*good_pairs)[1]
     return good_prompts, good_completions
 
-def prepare_nshot(example, n_shot=3):
+def generate_inputs(dataset, num_generations=1024, batch_size=16384, max_length=768):
+    generation_config = {'do_sample': True, 'top_p':0.9, 'temperature':0.7}
+    prompts = [dataset['prompt'][i] for i in range(len(dataset['prompt']))]
+    answers = [dataset['answer'][i] for i in range(len(dataset['answer']))]
+    inputs = tokenizer(prompts, padding='max_length', max_length=max_length, truncation=True, return_tensors="pt", padding_side='left')
+    inputs = inputs.repeat_interleave(num_generations)
+    answers = [element for element in answers for _ in range(num_generations)] # repeat interleave on answers
+    assert inputs.shape[0] == len(answers)
+    good_completions = []
+    good_prompts = []
+    i = 0
+    while i < len(inputs):
+        model.clear_cache()
+        # assumes that dataset fits in model's memory
+        completions = model.generate(inputs[i:i+batch_size, ...], generation_config=generation_config)
+        completions = tokenizer.batch_decode(completions, skip_special_tokens=True)
+        answer_batch = answers[i:i+batch_size]
+        good_prompt_batch, good_completion_batch = correctness_filter(prompts, completions, answer_batch)
+        good_completions.append(good_completion_batch)
+        good_prompts.append(good_prompt_batch)
+        i += batch_size
+
+    return good_prompts, good_completions
+
+def prepare_nshot(example, n_shot=1):
     three_shot_prompt = '\n'.join([f"Question: {train_dataset[i]['question']} \nAnswer: {train_dataset[i]['answer']}" for i in range(n_shot)])
     example['prompt'] = f"{three_shot_prompt}\n Question: {example['question']} \nAnswer :"
     example['completion'] = example['answer']
-    example['text'] = example['prompt'] +'|' + example['completion']
+    example['text'] = example['prompt'] + '|' + example['completion']
     return example
 
 def formatting_prompts_func(example):
     output_text = example['prompt'] + example['completion']
     return output_text
+
+class GenerateFilter(TrainerCallback):
+    def __init__(self):
+        super().__init__()
+
+    def on_step_end(self, args, state, control, model, tokenizer, **kwargs):
+        self.train_dataset = kwargs.get('train_dataset', None)
+        prompts, completions = generate_inputs(self.train_dataset)
+        self.train_dataset['prompts'] = prompts
+        self.train_dataset['completion'] = completions
+
+custom_callback = GenerateFilter()
 
 if __name__ == '__main__':
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -164,15 +200,15 @@ if __name__ == '__main__':
     n_heads = 4
     kernel = 1
 
-    model = SFTModel(
+    model = DualMixer(
         n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
         mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True).to(device)
 
     print (model)
     dataset = load_dataset("openai/gsm8k", "main")
     train_dataset, eval_dataset = dataset['train'], dataset['test'] # positive control
-    train_dataset = train_dataset.map(prepare_nshot, num_proc=16).remove_columns(['prompt', 'completion'])
-    eval_dataset = eval_dataset.map(prepare_nshot, num_proc=16).remove_columns(['prompt', 'completion'])
+    train_dataset = train_dataset.map(prepare_nshot, num_proc=16)
+    eval_dataset = eval_dataset.map(prepare_nshot, num_proc=16)
     
     print (len(train_dataset))
     model_path=f'{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
@@ -182,7 +218,7 @@ if __name__ == '__main__':
     response_template = '|'
     collator = DataCollatorForCompletionOnlyLM(response_template, tokenizer=tokenizer, pad_to_multiple_of=1024)
 
-    output_dir = f'{checkpoint_root}/gsm8k_SFT_srm_c1024'
+    output_dir = f'{checkpoint_root}/gsm8k_acceptance_sampling'
     training_args = SFTConfig(
         learning_rate = 1e-4,
         weight_decay = 0.1,
@@ -211,7 +247,7 @@ if __name__ == '__main__':
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             data_collator=collator,
-            formatting_func=gen_and_filter_inputs
+            callbacks=[custom_callback],
         )
     
     model.train()
