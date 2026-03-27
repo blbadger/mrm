@@ -9,14 +9,17 @@ import datasets
 from datasets import load_from_disk
 from safetensors.torch import load_model
 import os
+import re
 from dotenv import load_dotenv
 import shutil
 from repeat_main import MLPMixer
 from cached_inference import CachedMLPMixer
 from recurrent_inference import RecurrentMLPMixer
 from transformers import TextStreamer
+from dual_srm import DualMLPMixer
 import warnings
 import time
+import uuid
 warnings.simplefilter(action='ignore', category=UserWarning)
 
 
@@ -77,17 +80,15 @@ class DualMixer(DualMLPMixer, GenerationMixin):
         return False
 
     def save_cache(self, cache_store):
-    	cache_dict = 
     	for block in self.mixer_blocks:
             for h in range(len(block.token_mixing_layer.mixer_heads)):
-                cache_store[f'{token_mixing_layer},{h}'] = block.token_mixing_layer.mixer_heads[h].cache
+                cache_store[f'{block},{h}'] = block.token_mixing_layer.mixer_heads[h].cache
         return
 
     def load_cache(self, cache_store):
-    	cache_dict = 
     	for block in self.mixer_blocks:
             for h in range(len(block.token_mixing_layer.mixer_heads)):
-                block.token_mixing_layer.mixer_heads[h].cache = cache_store[f'{token_mixing_layer},{h}']
+                block.token_mixing_layer.mixer_heads[h].cache = cache_store[f'{block},{h}']
         return
 
     def build_cache(self, input_ids):
@@ -126,6 +127,148 @@ class DualMixer(DualMLPMixer, GenerationMixin):
         else:
             return CausalLMOutput(loss=0, logits=logits)
 
+# example node data structure
+# {'token': 143, 'value': 0.23, 'parent': id_number, 
+#  'children': [id_number...], 'is_leaf': True, 'cache_store': {['str']:torch.Tensor}}
+
+# example cache_store data structure:
+# {'mixer_blocks[0],1': torch.tensor([0.1, 0.2, 0.3]), 'mixer_blocks[0],2': torch.tensor([0.4, 0.5, 0.6])}
+
+# example tree data structure
+# {id_number: {'token': 143, 'value': 0.23, 'parent': id_number, ...}, 
+# id_number_2: {'token': ...}}
+
+def predict_next_nodes(policy_model, node, n_taken=2):
+    policy_model.load_cache(node.cache_store)
+    _, logits = policy_model.forward(node.token)
+    sorted_logits, indices = torch.topk(logits, n_taken)
+    top_indices = indices[:n_taken]
+    for index in top_indices:
+        # make new child node
+        new_id = uuid.uuid4()
+        node = {new_id: {'token': index, 'value': []}}
+        
+    return top_indices
+
+def tree_backup(tree):
+    # use 1/0 values in leaf nodes to assign values to others
+    """
+    Propagate values from leaf nodes up to their parents recursively.
+    
+    Args:
+        tree: Dictionary mapping node IDs to node dictionaries.
+              Each node has: 'token', 'value', 'parent', 'children', 'id', 'is_leaf', 'cache_store'
+    
+    Algorithm:
+        1. Find all leaf nodes (nodes with no children or is_leaf=True)
+        2. Append each leaf's value to its parent's value list
+        3. Mark processed leaves as non-leaves
+        4. Repeat until all nodes are processed
+    """
+    # Continue until no more leaf nodes to process
+    while True:
+        # Find current leaf nodes
+        leaf_nodes = []
+        for node_id, node in tree.items():
+            # A node is a leaf if it has no children or all children have been processed
+            if node.get('is_leaf', False) or (not node.get('children') or len(node.get('children', [])) == 0):
+                # Check if this leaf has already been processed (has values from children)
+                if node.get('is_leaf', True):  # Only process actual leaves
+                    leaf_nodes.append(node_id)
+        
+        # If no leaf nodes found, we're done
+        if not leaf_nodes:
+            break
+        
+        # Process each leaf node
+        for leaf_id in leaf_nodes:
+            leaf_node = tree[leaf_id]
+            parent_id = leaf_node.get('parent')
+            
+            # If this leaf has a parent, append its value to parent's values list
+            if parent_id is not None and parent_id in tree:
+                parent_node = tree[parent_id]
+                if 'values' not in parent_node:
+                    parent_node['values'] = []
+                parent_node['values'].append(leaf_node.get('value', 0))
+            
+            # Mark this node as processed by setting is_leaf to False
+            leaf_node['is_leaf'] = False
+        
+        # Check if any nodes became new leaves (all their children processed)
+        for node_id, node in tree.items():
+            if node.get('children'):
+                # Check if all children have been processed
+                all_children_processed = all(
+                    not tree[child_id].get('is_leaf', False)
+                    for child_id in node['children']
+                    if child_id in tree
+                )
+                # If all children processed and this node hasn't been marked as leaf yet
+                if all_children_processed and node.get('is_leaf', False) == False:
+                    # This node becomes a new leaf for the next iteration
+                    node['is_leaf'] = True
+    return tree
+
+def test_correctness(completions, answer, **kwargs) -> list[float]:
+    extracted_responses = [output_extract(c) for c in completions] 
+    # expects answers to be pre-extracted to save time
+    #print('='*60, f"Question:\n{prompts[1]}", f"\nAnswer:\n{answer[1]}\n",'-'*50, f"\nResponse:\n{completions[1]}", f"\nExtracted:\n{extracted_responses[1]}\n")
+    values = [1.0 if r == answer else 0.0 for r in extracted_responses]
+    return values
+    
+def get_token_sequences(tree):
+    outputs = {} # maps node_id to output
+    for key, node in tree.items():
+        if node['is_leaf']:
+            output = []
+            while node.parent:
+                token = node['token']
+                output.append(token)
+                node = node.parent
+            in_order_tokens = output.reverse()
+            outputs[key] = in_order_tokens
+    return outputs
+
+def get_token_values(tree):
+    outputs = {} # maps node_id to output
+    for key, node in tree.items():
+        if node['is_leaf']:
+            output = []
+            while node.parent:
+                values = node['value']
+                value = sum(values) / len(values) # mean accumulation
+                output.append(value)
+                node = node.parent
+            in_order_values = output.reverse()
+            outputs[key] = in_order_values
+    return outputs
+
+def get_evaluations(outputs, answer):
+    # expects a single answer, ie all outputs are for the same question
+    # batch decode tokens
+    output_tokens = [key, value for key, value in outputs.items()]
+    output_keys = [o.keys for o in outputs]
+    detokenized_outputs = tokenizer.decode(output_tokens)
+    extracted_answer = answer_extract(answer)
+    extracted_outputs = [output_extract(o) for o in detokenized_outputs]
+    values = test_correctness(extracted_outputs, extracted_answer)
+    # zip back up into outputs
+    for key, tokens, string, extracted_outputs, value in zip(output_keys, output_tokens, detokenized_outputs, values):
+        outputs[key] = {'tokens': tokens, 'string': string, 'value': value}
+    return outputs
+
+def assign_leaf_node_values(tree, answer):
+    output_dict = get_token_sequences(tree) # maps node_id to output tokens
+    evaluation_dict = get_evaluations(output_dict, answer)
+    for key, val in evaluation_dict.items():
+        tree[key]['value'] = val['value']
+        tree[key]['']
+
+
+
+
+
 def answer_extract(answer):
     cleaned_output = answer.split('####')
     if len(cleaned_output) > 1:
@@ -145,6 +288,7 @@ def output_extract(predicted_output):
     return outs
 
 if __name__ == "__main__":
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
     load_dotenv()
     checkpoint_root = os.getenv('CHECKPOINT_ROOT')
     data_root = os.getenv('DATA_ROOT')
@@ -159,15 +303,17 @@ if __name__ == "__main__":
     n_heads = 4
     kernel = 1
 
-    model = RecurrentInference(
+    policy_model = DualMixer(
         n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
         mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True).float().to(device)
 
-    generation_config = GenerationConfig(config={'do_sample': True, 'temperature': 0.7, 'top_p': 0.9, 'max_new_tokens': 256})
-    stopping_criteria = tokenizer.encode('\n')
-    print (model)
-    #load_model(model, f"{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors")
-    model = torch.compile(model)
+    load_model(policy_model, f"{checkpoint_root}/finemath_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors")
+    reward_model = DualMixer(
+        n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
+        mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True).float().to(device)
+
+    policy_model = torch.compile(policy_model)
+    reward_model = torch.compile(reward_model)
     text ='''Four score and seven years ago, our forefathers, for the purpose of a more perfect union, sought'''
     batch_size = 500
     input_ids = torch.tensor(tokenizer.encode(text)[1:]).repeat(batch_size, 1).to(device) # ignore bos token
@@ -175,5 +321,4 @@ if __name__ == "__main__":
     tokens_to_generate = 50
     streamer = TextStreamer(tokenizer, skip_prompt=False)
     start = time.time()
-    output_ids = model.generate(input_ids, max_length=len(input_ids[0]) + tokens_to_generate, generation_config=generation_config, use_cache=False) #, streamer=streamer)
     print (f'Example: {tokenizer.decode(output_ids[0])}, elapsed time: {time.time() - start}, t/s: {(tokens_to_generate * batch_size)/(time.time() - start)}')

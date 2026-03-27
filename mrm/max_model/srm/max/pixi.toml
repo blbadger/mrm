@@ -19,5 +19,5 @@ reference_srm = "python reference_srm.py"
 [dependencies]
 pytest = ">=9.0.2,<10"
 pytorch = ">=2.10.0,<3"
-modular = "26.1.*"
+modular = "26.2.*"
 pathlib = ">=1.0.1,<2"
