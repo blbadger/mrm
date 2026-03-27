@@ -192,7 +192,7 @@ def get_token_values(tree):
         if node['is_leaf']:
             output = []
             while node.parent:
-                values = node['value'] # assumes that values have already been mean accumulated
+                value = node['value'] # assumes that values have already been mean accumulated
                 output.append(value)
                 node = node.parent
             in_order_values = output.reverse()
