@@ -216,4 +216,4 @@ if __name__ == '__main__':
         eval_dataset = eval_dataset
     )
     #training_args.save_json(output_dir + '/checkpoint-1250')
-    trainer.train(output_dir + '/checkpoint-600')
+    trainer.train(output_dir + '/checkpoint-800')

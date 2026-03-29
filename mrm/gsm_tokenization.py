@@ -16,7 +16,7 @@ all_tokens = torch.tensor([])
 def all_packed_tokenization(example):
 	n_ctx = context_length # global context_length
 	tokens = tokenizer.encode_plus(
-			example['content'],
+			example['question']+example['code'],
 			add_special_tokens=False,
 			return_tensors='pt',
 			truncation=False,
