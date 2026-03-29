@@ -84,13 +84,13 @@ if __name__ == '__main__':
 
     print (model)
     dataset = load_dataset("openai/gsm8k", "main")
-    train_dataset, eval_dataset = dataset['train'], dataset['test'] # positive control
+    train_dataset, eval_dataset = dataset['train'], dataset['test']
     train_dataset = train_dataset.map(prepare_nshot, num_proc=16).remove_columns(['prompt', 'completion'])
     eval_dataset = eval_dataset.map(prepare_nshot, num_proc=16).remove_columns(['prompt', 'completion'])
     
     print (len(train_dataset))
-    model_path=f'{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
-    #model_path=f'{checkpoint_root}/finemath_srm_h4_mixed_decay_nonparallel_projs_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
+    #model_path=f'{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
+    model_path=f'{checkpoint_root}/finemath_h4_mixed_decay_nonparallel_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
     load_model(model, model_path)
     print ('pretrained model loaded')
     response_template = '||'
@@ -106,7 +106,7 @@ if __name__ == '__main__':
         logging_steps = 25,
         per_device_train_batch_size=16,
         max_seq_length = tokenized_length,
-        num_train_epochs = 500,
+        num_train_epochs = 13,
         save_steps = 100,
         eval_steps = 50,
         eval_strategy = 'steps',

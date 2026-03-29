@@ -176,12 +176,12 @@ if __name__ == '__main__':
     eval_dataset = eval_dataset.map(prepare_nshot, num_proc=16)
     print (len(train_dataset))
     #model_path=f'{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
-    model_path=f'{checkpoint_root}/gsm8k_SFT_srm_c1024/checkpoint-1700/model.safetensors'
+    model_path=f'{checkpoint_root}/gsm8k_SFT_srm_c1024/chkpt-300/model.safetensors'
     load_model(model, model_path)
 
     max_prompt_length = tokenized_length - 256
 
-    output_dir = f'{checkpoint_root}/gsm8k_srm_grpo_s1024_b8x4'
+    output_dir = f'{checkpoint_root}/gsm8k_srm_grpo_s1024_b16x4'
     training_args = GRPOConfig(
         learning_rate = 2e-5,
         weight_decay = 0.1,
@@ -194,13 +194,14 @@ if __name__ == '__main__':
         num_generations = 512, 
         #max_prompt_length = max_prompt_length,
         max_completion_length = tokenized_length - max_prompt_length,
-        num_train_epochs = 10,
-        save_steps = 50,
+        num_train_epochs = 12,
+        save_steps = 100,
         max_grad_norm = 0.1,
         report_to = "none",
         output_dir = output_dir,
         fp16=True,
         torch_compile=True, 
+        beta=0., 
         temperature = 0.7, # NB: top_p=0.9 supplied directly to generate in grpo_trainer
 )
 	
@@ -215,4 +216,4 @@ if __name__ == '__main__':
         eval_dataset = eval_dataset
     )
     #training_args.save_json(output_dir + '/checkpoint-1250')
-    trainer.train()
+    trainer.train(output_dir + '/checkpoint-600')
