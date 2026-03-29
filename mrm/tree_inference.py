@@ -152,8 +152,8 @@ def predict_next_nodes(policy_model, node, n_taken=2):
     return top_indices
 
 def tree_backup(tree):
-    # Algorithm: find leaves, back up each leaf value to root, accumulate
-    # expects leaves to have values
+    # Algorithm: find leaves, back up each leaf value to root, and accumulate
+    # NB this expects leaves to have values already
     for node in tree:
         if node.is_leaf:
             leaf_value = node.value
@@ -162,8 +162,7 @@ def tree_backup(tree):
                 tree[node.parent].append(leaf_value)
                 node = node.parent
     for node in tree:
-        if node.value = sum(node.value) / len(node.value)
-    
+        node.value = sum(node.value) / len(node.value)
     return tree
 
 def test_correctness(completions, answer, **kwargs) -> list[float]:
