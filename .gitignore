@@ -5,3 +5,4 @@ mrm-venv/
 mamba-venv/
 *venv/
 vllm_venv/
+*__pycache__
