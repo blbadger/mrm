@@ -7,7 +7,9 @@ from transformers.modeling_outputs import CausalLMOutput
 from transformers.generation import GenerationMixin, GenerationConfig
 import datasets
 from datasets import load_from_disk
-from safetensors.torch import load_model
+from safetensors.torch import load_model, save_model
+from accelerate import Accelerator
+from accelerate.utils import set_seed
 import os
 import re
 from dotenv import load_dotenv
@@ -42,6 +44,7 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 		parallel_heads=False,
 		use_projections=True,
 		dropout_layer=False,
+		is_reward_model=False,
 		**kwargs
 	):
 		super().__init__(vocab_size, hidden_dim, seq_len, num_blocks, heads=heads, kernel=kernel, expanded_convs=expanded_convs,
@@ -64,6 +67,10 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 		self.cache_built = False
 		self.device = self.output_layer.weight.device
 		self.warnings_issued={}
+		self.is_reward_model = is_reward_model
+		if is_reward_model:
+			self.loss_fn = nn.MSELoss()
+			self.reward_head = nn.Linear(self.hidden_dim, 1)
 	
 	def add_model_tags(self, tag):
 		print (tag)
@@ -109,6 +116,9 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 
 	def forward(self, input_ids, labels=None, **kwargs):
 		is_recurrent = input_ids.shape[1] < self.seq_len
+		# mask pad tokens in labels for loss computation
+		if labels is not None:
+			labels = torch.where(labels==self.pad_token_id, -100, labels)
 		if not self.cache_built and is_recurrent:
 			self.build_cache(input_ids)
 		index = input_ids.shape[1] - 1
@@ -118,7 +128,18 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 		x = self.input_layer(input_ids)
 		for block in self.mixer_blocks:
 			x = block(x, index, is_recurrent)
-		logits = self.output_layer(x).unsqueeze(1)
+		if not self.is_reward_model:
+			logits = self.output_layer(x).unsqueeze(1)
+		else:
+			# reward model output
+			output = self.reward_head(x).unsqueeze(1)
+			if labels is not None:
+				loss = self.loss_fn(output, labels)
+			else:
+				loss= 0
+			return CausalLMOutput(loss=loss, logits=output)
+
+		# policy model output
 		if labels is not None:
 			shift_logits = logits[:, :-1].contiguous()
 			shift_labels = labels[:, 1:].contiguous()
@@ -293,9 +314,221 @@ def output_extract(predicted_output):
 	return outs
 
 
-def train_loop(policy_model, reward_model, train_dataset, test_dataset, generate_batch=4096, train_steps=200000, batch_size=16):
-	for step in train_steps:
-		...
+def train_loop(policy_model,
+			reward_model,
+			train_dataset,
+			test_dataset,
+			tokenizer,
+			accelerator=None,
+			generate_batch=4096,
+			train_steps=200000,
+			batch_size=16,
+			learning_rate=5e-4,
+			log_steps=10,
+			eval_steps=100,
+			save_steps=1000,
+			checkpoint_dir="checkpoints"
+			):
+	"""
+	Training loop that:
+	1. For each dataset element, generates `generate_batch` samples using policy model
+	2. Scores samples via convert_generations_to_tree, tree_backup, and get_token_values
+	3. Trains reward model on samples via gradient accumulation with batch_size
+	
+	Args:
+		policy_model: Model used for generation (frozen)
+		reward_model: Model to be trained
+		train_dataset: Training dataset with 'question' and 'answer' fields
+		test_dataset: Test dataset (optional, for evaluation)
+		tokenizer: Tokenizer for encoding/decoding
+		accelerator: Accelerate Accelerator instance (if None, creates one)
+		generate_batch: Number of samples to generate per dataset element
+		train_steps: Total number of training steps
+		batch_size: Batch size for gradient accumulation
+		learning_rate: Learning rate for optimizer
+		log_steps: Steps between logging
+		eval_steps: Steps between evaluation
+		save_steps: Steps between checkpoints
+		checkpoint_dir: Directory to save checkpoints
+	"""
+	# Initialize accelerator if not provided
+	if accelerator is None:
+		accelerator = Accelerator()
+	
+	# Create checkpoint directory
+	if accelerator.is_main_process:
+		os.makedirs(checkpoint_dir, exist_ok=True)
+	
+	optimizer = torch.optim.AdamW(reward_model.parameters(), lr=learning_rate)
+	
+	# Prepare models and optimizer with accelerator
+	reward_model, optimizer = accelerator.prepare(reward_model, optimizer)
+	
+	policy_model.eval()  # Freeze policy model
+	reward_model.train()
+	
+	device = accelerator.device
+	
+	# Split dataset across processes for DDP
+	if accelerator.num_processes > 1:
+		process_index = accelerator.process_index
+		num_processes = accelerator.num_processes
+		dataset_size = len(train_dataset)
+		indices_per_process = dataset_size // num_processes
+		start_idx = process_index * indices_per_process
+		end_idx = start_idx + indices_per_process if process_index < num_processes - 1 else dataset_size
+		process_indices = list(range(start_idx, end_idx))
+		accelerator.print(f"Process {process_index}: Training on indices {start_idx} to {end_idx}")
+	else:
+		process_indices = list(range(len(train_dataset)))
+	
+	for step in range(train_steps):
+		# Get a dataset element (cycle through process-specific indices)
+		local_idx = step % len(process_indices)
+		data_idx = process_indices[local_idx]
+		data_element = train_dataset[data_idx]
+		
+		question = data_element['question']
+		answer = data_element['answer']
+		
+		# Tokenize the question
+		input_ids = tokenizer.encode(question, 
+			return_tensors='pt', 
+			max_length=512, 
+			padding='max_length', 
+			padding_side='left').to(device)
+		
+		# Generate samples using policy model
+		if accelerator.is_main_process:
+			accelerator.print(f"Step {step}/{train_steps}: Generating {generate_batch} samples...")
+			
+		if hasattr(policy_model, 'module'):
+			policy_model.module.clear_cache()
+		else:
+			policy_model.clear_cache()
+		
+		with torch.no_grad():
+			# Generate multiple completions
+			generated_ids = policy_model.generate(
+				input_ids.repeat(generate_batch, 1),
+				max_new_tokens=256,
+				do_sample=True,
+				temperature=0.7,
+				top_p=0.9,
+				pad_token_id=tokenizer.pad_token_id
+			)
+		
+		# Extract only the generated tokens (remove prompt)
+		prompt_length = input_ids.shape[1]
+		generated_tokens = generated_ids[:, prompt_length:]
+		
+		# Convert generations to tree structure
+		tree = convert_generations_to_tree(generated_ids)
+		# Decode completions for evaluation
+		completions = tokenizer.decode(generated_tokens, skip_special_tokens=True)
+		# Score completions
+		values = test_correctness(completions, answer)
+		# Backup values through tree
+		tree = tree_backup(tree, values)
+		# Get token-level values
+		token_values = get_token_values(tree)
+		token_sequences = get_token_sequences(tree)
+		
+		# Train reward model with gradient accumulation
+		optimizer.zero_grad()
+		total_loss = 0.0
+		
+		# Calculate gradient accumulation steps
+		num_leaves = len(token_sequences)
+		accumulation_steps = num_leaves // batch_size
+		for batch_idx in range(0, num_leaves, batch_size):
+			batch_end = min(batch_idx + batch_size, num_leaves)
+			batch_sequences = generated_ids[batch_idx:batch_end]
+			batch_values = token_values[batch_idx:batch_end]
+			
+			# Pad sequences to same length
+			max_len = max(len(seq) for seq in batch_sequences)
+			padded_sequences = []
+			for seq in batch_sequences:
+				padded = seq + [tokenizer.pad_token_id] * (max_len - len(seq))
+				padded_sequences.append(padded)
+			
+			# Convert to tensors
+			batch_input_ids = torch.tensor(padded_sequences, dtype=torch.long).to(device)
+			batch_target_values = torch.tensor(batch_values, dtype=torch.float).to(device)
+			output, loss = reward_model(batch_input_ids)
+			
+			# Scale loss by accumulation steps
+			loss = loss / accumulation_steps
+			accelerator.backward(loss)
+			
+			total_loss += loss.item()
+		
+		# Update weights after accumulation
+		optimizer.step()
+		
+		# Logging
+		if step % log_steps == 0:
+			avg_reward = sum(values) / len(values)
+			accelerator.print(f"Step {step}: Loss={total_loss:.4f}, Avg Reward={avg_reward:.4f}, Num Leaves={num_leaves}")
+		
+		# Periodic evaluation (only on main process)
+		if step % eval_steps == 0 and test_dataset is not None and accelerator.is_main_process:
+			accelerator.print(f"Step {step}: Running evaluation...")
+			evaluate_model(policy_model, reward_model, test_dataset, tokenizer, device)
+
+		# Save checkpoint (only on main process)
+		if step % save_steps == 0 and step > 0 and accelerator.is_main_process:
+			checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint-{step}")
+			os.makedirs(checkpoint_path, exist_ok=True)
+			
+			# Unwrap model for saving
+			unwrapped_model = accelerator.unwrap_model(reward_model)
+			save_model(unwrapped_model, os.path.join(checkpoint_path, "model.safetensors"))
+			accelerator.print(f"Saved checkpoint to {checkpoint_path}")
+	
+	# Wait for all processes to finish
+	accelerator.wait_for_everyone()
+
+	return reward_model
+
+
+def evaluate_model(policy_model, reward_model, test_dataset, tokenizer, device, num_samples=10):
+	"""Evaluate model on test dataset"""
+	policy_model.eval()
+	reward_model.eval()
+	
+	total_correct = 0
+	total_samples = 0
+	
+	with torch.no_grad():
+		for i in range(min(num_samples, len(test_dataset))):
+			data_element = test_dataset[i]
+			question = data_element['question']
+			answer = data_element['answer']
+			
+			input_ids = tokenizer.encode(question, return_tensors='pt').to(device)
+			policy_model.clear_cache()
+			
+			generated_ids = policy_model.generate(
+				input_ids,
+				max_new_tokens=256,
+				do_sample=False,
+				pad_token_id=tokenizer.pad_token_id
+			)
+			
+			completion = tokenizer.decode(generated_ids[0, input_ids.shape[1]:], skip_special_tokens=True)
+			values = test_correctness([completion], answer)
+			total_correct += values[0]
+			total_samples += 1
+	
+	accuracy = total_correct / total_samples if total_samples > 0 else 0
+	print(f"Evaluation Accuracy: {accuracy:.4f} ({total_correct}/{total_samples})")
+	
+	policy_model.train()
+	reward_model.train()
+	
+	return accuracy
 
 
 
