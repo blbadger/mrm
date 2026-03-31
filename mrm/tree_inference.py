@@ -401,7 +401,7 @@ def train_loop(policy_model,
 		# Generate samples using policy model
 		if accelerator.is_main_process:
 			accelerator.print(f"Step {step}/{train_steps}: Generating {generate_batch} samples...")
-			
+
 		if hasattr(policy_model, 'module'):
 			policy_model.module.clear_cache()
 		else:
@@ -531,23 +531,21 @@ def evaluate_model(policy_model, reward_model, test_dataset, tokenizer, device, 
 	return accuracy
 
 
-
-
-generations = torch.tensor([
-   [0, 4, 5, 3],
-   [0, 4, 4, 1],
-   [0, 3, 5, 3],
-   [0, 4, 5, 2]
-])
-
-values = [0, 1, 0, 0]
-
-tree = convert_generations_to_tree(generations)
-# print (get_token_sequences(tree))
-tree = tree_backup(tree, values)
-print (tree)
-print ('\n\n\n')
-print (get_token_values(tree))
+def tree_test():
+	generations = torch.tensor([
+	[0, 4, 5, 3],
+	[0, 4, 4, 1],
+	[0, 3, 5, 3],
+	[0, 4, 5, 2]
+	])
+	values = [0, 1, 0, 0]
+	tree = convert_generations_to_tree(generations)
+	# print (get_token_sequences(tree))
+	tree = tree_backup(tree, values)
+	print (tree)
+	print ('\n\n\n')
+	print (get_token_values(tree))
+	return
 
 if __name__ == "__main__":
 	device = 'cuda' if torch.cuda.is_available() else 'cpu'
