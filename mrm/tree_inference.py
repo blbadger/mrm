@@ -252,22 +252,6 @@ def get_token_values(tree):
 			outputs[leaf_key] = output
 	return outputs
 
-generations = torch.tensor([
-   [0, 4, 5, 3],
-   [0, 4, 4, 1],
-   [0, 3, 5, 3],
-   [0, 4, 5, 3]
-])
-
-values = [0, 1, 0, 0]
-
-tree = convert_generations_to_tree(generations)
-# print (get_token_sequences(tree))
-tree = tree_backup(tree, values)
-print (tree)
-print ('\n\n\n')
-print (get_token_values(tree))
-
 
 def get_evaluations(outputs, answer):
 	# expects a single answer, ie all outputs are for the same question
@@ -308,6 +292,30 @@ def output_extract(predicted_output):
 		   outs.append(out)
 	return outs
 
+
+def train_loop(policy_model, reward_model, train_dataset, test_dataset, generate_batch=4096, train_steps=200000, batch_size=16):
+	for step in train_steps:
+		...
+
+
+
+
+generations = torch.tensor([
+   [0, 4, 5, 3],
+   [0, 4, 4, 1],
+   [0, 3, 5, 3],
+   [0, 4, 5, 2]
+])
+
+values = [0, 1, 0, 0]
+
+tree = convert_generations_to_tree(generations)
+# print (get_token_sequences(tree))
+tree = tree_backup(tree, values)
+print (tree)
+print ('\n\n\n')
+print (get_token_values(tree))
+
 if __name__ == "__main__":
 	device = 'cuda' if torch.cuda.is_available() else 'cpu'
 	load_dotenv()
@@ -327,8 +335,8 @@ if __name__ == "__main__":
 	policy_model = DualMixer(
 		n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
 		mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True).float().to(device)
-
 	load_model(policy_model, f"{checkpoint_root}/finemath_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors")
+
 	reward_model = DualMixer(
 		n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
 		mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True).float().to(device)
