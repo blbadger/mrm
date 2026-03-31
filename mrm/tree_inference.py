@@ -1,3 +1,4 @@
+from typing import _ReturnT_nd_co
 import torch
 import torch.nn as nn
 from einops import rearrange
@@ -10,6 +11,7 @@ from datasets import load_from_disk
 from safetensors.torch import load_model, save_model
 from accelerate import Accelerator
 from accelerate.utils import set_seed
+from safetensors.torch import load_model
 import os
 import re
 from dotenv import load_dotenv
@@ -313,6 +315,12 @@ def output_extract(predicted_output):
 		   outs.append(out)
 	return outs
 
+def prepare_nshot(example, n_shot=3):
+    # n shot append and rename fields for rl
+    three_shot_prompt = '\n'.join([f"Question: {train_dataset[i]['question']} \nAnswer: {train_dataset[i]['answer']}" for i in range(n_shot)])
+    example['prompt'] = f"{three_shot_prompt}\n Question: {example['question']} \n Answer:"
+    example['cleaned_answer'] = output_extract(example['answer'])
+    return example
 
 def train_loop(policy_model,
 			reward_model,
@@ -547,6 +555,17 @@ def tree_test():
 	print (get_token_values(tree))
 	return
 
+def throughput_test():
+	text ='''Four score and seven years ago, our forefathers, for the purpose of a more perfect union, sought'''
+	batch_size = 500
+	input_ids = torch.tensor(tokenizer.encode(text)[1:]).repeat(batch_size, 1).to(device) # ignore bos token
+	print (input_ids.shape)
+	tokens_to_generate = 50
+	streamer = TextStreamer(tokenizer, skip_prompt=False)
+	start = time.time()
+	print (f'Example: {tokenizer.decode(output_ids[0])}, elapsed time: {time.time() - start}, t/s: {(tokens_to_generate * batch_size)/(time.time() - start)}')
+	return
+
 if __name__ == "__main__":
 	device = 'cuda' if torch.cuda.is_available() else 'cpu'
 	load_dotenv()
@@ -557,6 +576,12 @@ if __name__ == "__main__":
 	n_vocab = tokenizer.vocab_size
 	print("Vocab size: ", n_vocab)
 
+	dataset = load_dataset("openai/gsm8k", "main")
+    train_dataset, eval_dataset = dataset['train'], dataset['test']
+    train_dataset = train_dataset.map(prepare_nshot, num_proc=16)
+    print (train_dataset[0])
+    eval_dataset = eval_dataset.map(prepare_nshot, num_proc=16)
+
 	tokenized_length = 1024
 	dim = 1024
 	layers = 16
@@ -565,20 +590,16 @@ if __name__ == "__main__":
 
 	policy_model = DualMixer(
 		n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
-		mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True).float().to(device)
+		mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True, is_reward_model=False).float().to(device)
 	load_model(policy_model, f"{checkpoint_root}/finemath_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors")
 
 	reward_model = DualMixer(
 		n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
-		mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True).float().to(device)
+		mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True, is_reward_model=True).float().to(device)
 
+	model_path=f'{checkpoint_root}/gsm8k_SFT_srm_c1024/chkpt-300/model.safetensors'
+    load_model(policy_model, model_path)
 	policy_model = torch.compile(policy_model)
 	reward_model = torch.compile(reward_model)
-	text ='''Four score and seven years ago, our forefathers, for the purpose of a more perfect union, sought'''
-	batch_size = 500
-	input_ids = torch.tensor(tokenizer.encode(text)[1:]).repeat(batch_size, 1).to(device) # ignore bos token
-	print (input_ids.shape)
-	tokens_to_generate = 50
-	streamer = TextStreamer(tokenizer, skip_prompt=False)
-	start = time.time()
-	print (f'Example: {tokenizer.decode(output_ids[0])}, elapsed time: {time.time() - start}, t/s: {(tokens_to_generate * batch_size)/(time.time() - start)}')
+
+	train_loop(policy_model, reward_model, train_dataset,eval_dataset, tokenizer)
