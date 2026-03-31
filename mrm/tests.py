@@ -15,7 +15,7 @@ from repeat_main import MLPMixer
 from cached_inference import CachedMLPMixer
 from transformers import TextStreamer
 from inference import InferenceMLPMixer as CachedInferenceMLPMixer
-from inference import RecurrentInference
+
 from naive_inference import InferenceMLPMixer
 import warnings
 warnings.simplefilter(action='ignore', category=UserWarning)
