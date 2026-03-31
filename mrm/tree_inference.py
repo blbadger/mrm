@@ -1,4 +1,3 @@
-from typing import _ReturnT_nd_co
 import torch
 import torch.nn as nn
 from einops import rearrange
@@ -12,6 +11,7 @@ from safetensors.torch import load_model, save_model
 from accelerate import Accelerator
 from accelerate.utils import set_seed
 from safetensors.torch import load_model
+from datasets import load_dataset, load_from_disk
 import os
 import re
 from dotenv import load_dotenv
@@ -366,7 +366,9 @@ def train_loop(policy_model,
 	# Create checkpoint directory
 	if accelerator.is_main_process:
 		os.makedirs(checkpoint_dir, exist_ok=True)
-	
+	device = accelerator.device
+	reward_model = reward_model.to(device)
+	policy_model = policy_model.to(device)
 	optimizer = torch.optim.AdamW(reward_model.parameters(), lr=learning_rate)
 	
 	# Prepare models and optimizer with accelerator
@@ -375,7 +377,6 @@ def train_loop(policy_model,
 	policy_model.eval()  # Freeze policy model
 	reward_model.train()
 	
-	device = accelerator.device
 	
 	# Split dataset across processes for DDP
 	if accelerator.num_processes > 1:
@@ -567,7 +568,6 @@ def throughput_test():
 	return
 
 if __name__ == "__main__":
-	device = 'cuda' if torch.cuda.is_available() else 'cpu'
 	load_dotenv()
 	checkpoint_root = os.getenv('CHECKPOINT_ROOT')
 	data_root = os.getenv('DATA_ROOT')
@@ -590,12 +590,11 @@ if __name__ == "__main__":
 
 	policy_model = DualMixer(
 		n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
-		mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True, is_reward_model=False).float().to(device)
-	load_model(policy_model, f"{checkpoint_root}/finemath_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors")
+		mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True, is_reward_model=False).float()
 
 	reward_model = DualMixer(
 		n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
-		mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True, is_reward_model=True).float().to(device)
+		mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True, is_reward_model=True).float()
 
 	model_path=f'{checkpoint_root}/gsm8k_SFT_srm_c1024/chkpt-300/model.safetensors'
 	load_model(policy_model, model_path)

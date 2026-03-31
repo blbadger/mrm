@@ -39,7 +39,7 @@ def all_packed_tokenization(example):
 def packed_tokenization(example):
 	n_ctx = context_length # global context_length
 	tokens = tokenizer.encode_plus(
-			example['content'],
+			example['question']+example['code'],
 			add_special_tokens=False,
 			return_tensors='pt',
 			truncation=False,
@@ -54,16 +54,17 @@ def packed_tokenization(example):
 def tokenization(example):
 	# global padding_side, context_length
 	n_ctx = context_length
+	concatted_examples = [q+r for q, r in zip(example['question'], example['code'])]
 	tokens = tokenizer.batch_encode_plus(
-			example['content'],
+			concatted_examples,
 			add_special_tokens=False,
 			return_tensors='pt',
 			truncation=True,
 			padding='max_length',
 			padding_side=padding_side, 
 			max_length=n_ctx
-		)
-	return tokens
+		).input_ids
+	return {'input_ids': tokens}
 
 
 def map_dataset(train_path, test_path, split_index=40000, packed=False, context=1024, minimum_length=0):
@@ -102,7 +103,7 @@ def debatch(example):
 	return pa.Table.from_pylist(debatched_inputs)
 
 # user-defined vals
-packed = True
+packed = False
 context_length = 1024
 padding_side = 'right'
 prefix='gsm'

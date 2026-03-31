@@ -5,6 +5,7 @@ import transformers
 from transformers import AutoTokenizer
 import datasets
 from datasets import load_from_disk
+from safetensors.torch import load_model
 import mlflow
 from prettytable import PrettyTable
 import os
@@ -802,14 +803,14 @@ if __name__ == "__main__":
     model = MLPMixer(
         n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True)
     count_parameters(model)
-    #model = torch.compile(model)
+    load_model(model, f"{checkpoint_root}/finemath_h4_mixed_decay_nonparallel_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors")
     
     n_gpus = torch.cuda.device_count()
     total_batch_size = 64 #  128
     batch_size = total_batch_size // n_gpus
     train_path = f"{data_root}/finemath-4-tokenized-train-c1024-8k"
     test_path = f"{data_root}/finemath-4-tokenized-test-c1024-8k"
-    output_dir = f"{checkpoint_root}/finemath_h{n_heads}_mixed_decay_nonparallel_projs_k{kernel}_{dim}_n{layers}_c{tokenized_length}_b{batch_size}x{n_gpus}"
+    output_dir = f"{checkpoint_root}/gsm8k_finemathpre_{n_heads}_mixed_decay_nonparallel_projs_k{kernel}_{dim}_n{layers}_c{tokenized_length}_b{batch_size}x{n_gpus}"
   
     datasets.config.IN_MEMORY_MAX_SIZE = 1e9
     train_dataset = load_from_disk(train_path, keep_in_memory=None)
@@ -824,10 +825,10 @@ if __name__ == "__main__":
         per_device_train_batch_size=batch_size,
         per_device_eval_batch_size=batch_size,
         gradient_accumulation_steps=1,
-        warmup_steps=50,
+        warmup_steps=4000,
         eval_steps=4000,
         save_steps=8000,
-        learning_rate=5e-4,
+        learning_rate=2e-5,
         fp16=True,
         eval_strategy="steps",
         output_dir=output_dir,
@@ -851,6 +852,6 @@ if __name__ == "__main__":
     if not os.path.isdir(output_dir): 
         os.mkdir(output_dir) 
     shutil.copy(code_path, output_dir) 
-
+    print (trainer.evaluate())
     model.train()
     trainer.train()
