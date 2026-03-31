@@ -12,6 +12,7 @@ from accelerate import Accelerator
 from accelerate.utils import set_seed
 from safetensors.torch import load_model
 from datasets import load_dataset, load_from_disk
+from accelerate.utils import DistributedDataParallelKwargs
 import os
 import re
 from dotenv import load_dotenv
@@ -135,7 +136,6 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 		else:
 			# reward model output
 			output = self.reward_head(x).squeeze(-1)
-			print (output.shape)
 			if labels is not None:
 				loss = self.loss_fn(output, labels)
 			else:
@@ -233,9 +233,10 @@ def tree_backup(tree, values):
 
 def test_correctness(completions, answer, **kwargs) -> list[float]:
 	extracted_responses = [output_extract(c) for c in completions] 
-	# expects answers to be pre-extracted to save time
+	extracted_answers = [answer_extract(answer) for _ in completions] # duplicate answer
 	#print('='*60, f"Question:\n{prompts[1]}", f"\nAnswer:\n{answer[1]}\n",'-'*50, f"\nResponse:\n{completions[1]}", f"\nExtracted:\n{extracted_responses[1]}\n")
-	values = [1.0 if r == answer else 0.0 for r in extracted_responses]
+	#print (extracted_responses, answer_extract(answer))
+	values = [1.0 if r == a else 0.0 for r, a in zip(extracted_responses, extracted_answers)]
 	return values
 
 def get_token_sequences(tree):
@@ -314,22 +315,28 @@ def answer_extract(answer):
 	return cleaned_output
 
 def output_extract(predicted_output):
+	if isinstance(predicted_output, list):
+		predicted_output = predicted_output[0]
 	output = re.findall("(-?[$0-9.,]{2,})|(-?[0-9]+)", predicted_output)
 	if output:
-		output = output[-1]
+		output = output[-1] # matches last pattern
 	outs = []
-	for i, out in enumerate(output):
-		if isinstance(out, tuple) and len(out) > 1: 
-		   outs.append((out[0] if out[0] else out[1]).strip(' %$@!*,.'))
+	#print (output)
+	if (isinstance(output, tuple) or isinstance(output, list)) and len(output) > 1: 
+		outs.append((output[0] if output[0] else output[1]).strip(' %$@!*,.'))
+	else:
+		if not output:
+			outs.append('')
 		else:
-		   outs.append(out)
-	return outs
+			outs.append(output.strip(' %$@!*,.'))
+	cleaned_output = outs[0]
+	return cleaned_output
 
 def prepare_nshot(example, n_shot=3):
     # n shot append and rename fields for rl
     three_shot_prompt = '\n'.join([f"Question: {train_dataset[i]['question']} \nAnswer: {train_dataset[i]['answer']}" for i in range(n_shot)])
     example['prompt'] = f"{three_shot_prompt}\n Question: {example['question']} \n Answer:"
-    example['cleaned_answer'] = output_extract(example['answer'])
+    example['cleaned_answer'] = answer_extract(example['answer'])
     return example
 
 def train_loop(policy_model,
@@ -338,14 +345,14 @@ def train_loop(policy_model,
 			test_dataset,
 			tokenizer,
 			accelerator=None,
-			generate_batch=128,
+			generate_batch=1024,
 			train_steps=200000,
 			batch_size=8,
-			learning_rate=5e-4,
+			learning_rate=1e-4,
 			log_steps=10,
 			eval_steps=100,
 			save_steps=1000,
-			checkpoint_dir="checkpoints"
+			checkpoint_dir="{checkpoint-root}/tree_rm_b512"
 			):
 	"""
 	Training loop that:
@@ -371,7 +378,8 @@ def train_loop(policy_model,
 	"""
 	# Initialize accelerator if not provided
 	if accelerator is None:
-		accelerator = Accelerator()
+		ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
+		accelerator = Accelerator(kwargs_handlers=[ddp_kwargs])
 	
 	# Create checkpoint directory
 	if accelerator.is_main_process:
@@ -418,7 +426,7 @@ def train_loop(policy_model,
 		
 		# Generate samples using policy model
 		if accelerator.is_main_process:
-			accelerator.print(f"Step {step}/{train_steps}: Generating {generate_batch} samples...")
+			accelerator.print(f"Step {step}/{train_steps}: Generating {generate_batch} samples per question...")
 
 		if hasattr(policy_model, 'module'):
 			policy_model.module.clear_cache()
@@ -447,7 +455,8 @@ def train_loop(policy_model,
 		tree = tree_backup(tree, values)
 		token_values = get_token_values(tree)
 		token_sequences = get_token_sequences(tree)
-				
+		correct_leaves = sum([node['value'] for node in tree.values() if node['is_leaf']])
+		print (f'Correct paths: {correct_leaves}')		
 		value_batch = get_value_batch(tree, token_values)
 		# Train reward model with gradient accumulation
 		optimizer.zero_grad()
@@ -456,7 +465,6 @@ def train_loop(policy_model,
 		# Calculate gradient accumulation steps
 		num_leaves = len(token_sequences)
 		accumulation_steps = num_leaves // batch_size
-		#print (accumulation_steps, generated_ids.shape, prompt_length); return
 		for batch_idx in range(0, num_leaves, batch_size):
 			batch_end = min(batch_idx + batch_size, num_leaves)
 			batch_ids = generated_ids[batch_idx:batch_end]
@@ -478,7 +486,7 @@ def train_loop(policy_model,
 		# Logging
 		if step % log_steps == 0:
 			avg_reward = sum(values) / len(values)
-			accelerator.print(f"Step {step}: Loss={total_loss:.4f}, Avg Reward={avg_reward:.4f}, Num Leaves={num_leaves}")
+			accelerator.print(f"Step {step}: Loss={total_loss/accumulation_steps:.4f}, Correct Leaves={correct_leaves:.4f}, Num Leaves={num_leaves}")
 		
 		# Periodic evaluation (only on main process)
 		if step % eval_steps == 0 and test_dataset is not None and accelerator.is_main_process:
