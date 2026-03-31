@@ -138,14 +138,12 @@ def convert_generations_to_tree(tokens):
 	for j, token in enumerate(tokens[:, 0]):
 		if token.item() not in first_tokens:
 			new_id = uuid.uuid4()
-			tree[new_id] = {'token': token.item(), 'value': None, 'parent': None, 'children': [], 'is_leaf': True, 'cache_store': None}
+			tree[new_id] = {'token': token.item(), 'value': [], 'parent': None, 'children': [], 'is_leaf': True, 'cache_store': None, 'index': j}
 			parent_map[str(j)] = new_id
 			first_tokens[token.item()] = new_id
 		else:
 			node_id = first_tokens[token.item()]
 			parent_map[str(j)] = node_id
-
-	print (tree, '\n\n')
 
 	for index in range(1, tokens.shape[1]):
 		node_map = {} # maps (parent, current) tuple to uuid
@@ -154,7 +152,7 @@ def convert_generations_to_tree(tokens):
 			if (parent_map[str(j)], token.item()) not in node_map:
 				# add new node
 				new_id = uuid.uuid4()
-				tree[new_id] = {'token': token.item(), 'value': None, 'parent': parent_map[(str(j))], 'children': [], 'is_leaf': True, 'cache_store': None}
+				tree[new_id] = {'token': token.item(), 'value': [], 'parent': parent_map[(str(j))], 'children': [], 'is_leaf': True, 'cache_store': None, 'index': j}
 				parent = parent_map[str(j)]
 				tree[parent]['children'].append(new_id)
 
@@ -165,18 +163,7 @@ def convert_generations_to_tree(tokens):
 			parent_map[str(j)] = new_id # replace parent map with current token
 			tree[parent]['is_leaf'] = False
 
-
 	return tree
-
-
-generations = torch.tensor([
-   [0, 4, 5, 3],
-   [0, 4, 4, 1],
-   [0, 3, 5, 3],
-   [0, 4, 5, 2]
-])
-
-pprint.pprint(convert_generations_to_tree(generations))
 
 
 # example node data structure
@@ -199,21 +186,26 @@ def predict_next_nodes(policy_model, node, n_taken=2):
 		# make new child node
 		new_id = uuid.uuid4()
 		node.children.append(new_id)
-		new_node = {new_id: {'token': index, 'value': None, 'is_leaf': True, 'parent': node.key, 'cache_store':policy_model.get_cache(), 'children': []}}
+		new_node = {new_id: {'token': index, 'value': None, 'is_leaf': True, 'parent': [node.key], 'cache_store':policy_model.get_cache(), 'children': []}}
 	return top_indices
 
-def tree_backup(tree):
+def tree_backup(tree, values):
 	# Algorithm: find leaves, back up each leaf value to root, and accumulate
 	# NB this expects leaves to have values already
-	for node in tree:
-		if node.is_leaf:
-			leaf_value = node.value
+	for key, node in tree.items():
+		if node['is_leaf']:
+			leaf_value = values[node['index']] # assign value by index
+			node['value'] = [leaf_value]
 			# back up value
-			while node.parent:
-				tree[node.parent].append(leaf_value)
-				node = node.parent
-	for node in tree:
-		node.value = sum(node.value) / len(node.value)
+			while True:
+				parent_id = tree[key]['parent']
+				if not parent_id:
+					break
+				tree[parent_id]['value'].append(leaf_value)
+				key = tree[key]['parent']
+				
+	for key, node in tree.items():
+		node['value'] = sum(node['value']) / len(node['value'])
 	return tree
 
 def test_correctness(completions, answer, **kwargs) -> list[float]:
@@ -222,32 +214,57 @@ def test_correctness(completions, answer, **kwargs) -> list[float]:
 	#print('='*60, f"Question:\n{prompts[1]}", f"\nAnswer:\n{answer[1]}\n",'-'*50, f"\nResponse:\n{completions[1]}", f"\nExtracted:\n{extracted_responses[1]}\n")
 	values = [1.0 if r == answer else 0.0 for r in extracted_responses]
 	return values
-	
+
 def get_token_sequences(tree):
 	outputs = {} # maps node_id to output
 	for key, node in tree.items():
 		if node['is_leaf']:
+			leaf_key = key
 			output = []
-			while node.parent:
-				token = node['token']
+			while True:
+				parent_id = tree[key]['parent']
+				token = tree[key]['token']
 				output.append(token)
-				node = node.parent
-			in_order_tokens = output.reverse()
-			outputs[key] = in_order_tokens
+				if not parent_id:
+					break
+				key = parent_id
+			output.reverse()
+			outputs[leaf_key] = output
 	return outputs
 
-def get_token_values(tree):
+generations = torch.tensor([
+   [0, 4, 5, 3],
+   [0, 4, 4, 1],
+   [0, 3, 5, 3],
+   [0, 4, 5, 3]
+])
+
+values = [0, 1, 0, 0]
+
+tree = convert_generations_to_tree(generations)
+# print (tree.items())
+# print (get_token_sequences(tree))
+print (tree_backup(tree, values))
+
+def get_token_values(tree, values):
+	# values shape: [b]
 	outputs = {} # maps node_id to output
 	for key, node in tree.items():
 		if node['is_leaf']:
+			leaf_key = key
+			value = values[node['index']]
 			output = []
-			while node.parent:
-				value = node['value'] # assumes that values have already been mean accumulated
+			while True:
+				parent_id = tree[key]['parent']
+				value = tree[key]['value']
 				output.append(value)
-				node = node.parent
-			in_order_values = output.reverse()
-			outputs[key] = in_order_values
+				if not parent_id:
+					break
+				key = parent_id
+			output.reverse()
+			outputs[key] = output
 	return outputs
+
 
 def get_evaluations(outputs, answer):
 	# expects a single answer, ie all outputs are for the same question
