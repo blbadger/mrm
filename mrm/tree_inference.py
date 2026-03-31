@@ -120,7 +120,7 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 		is_recurrent = input_ids.shape[1] < self.seq_len
 		# mask pad tokens in labels for loss computation
 		if labels is not None:
-			labels = torch.where(labels==self.pad_token_id, -100, labels)
+			labels = torch.where(labels==tokenizer.pad_token_id, -100., labels).to(self.input_layer.weight.dtype)
 		if not self.cache_built and is_recurrent:
 			self.build_cache(input_ids)
 		index = input_ids.shape[1] - 1
@@ -134,7 +134,8 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 			logits = self.output_layer(x).unsqueeze(1)
 		else:
 			# reward model output
-			output = self.reward_head(x).unsqueeze(1)
+			output = self.reward_head(x).squeeze(-1)
+			print (output.shape)
 			if labels is not None:
 				loss = self.loss_fn(output, labels)
 			else:
@@ -171,7 +172,6 @@ def convert_generations_to_tree(tokens):
 	for index in range(1, tokens.shape[1]):
 		node_map = {} # maps (parent, current) tuple to uuid
 		for j, token in enumerate(tokens[:, index]):
-			print (token)
 			if (parent_map[str(j)], token.item()) not in node_map:
 				# add new node
 				new_id = uuid.uuid4()
@@ -275,6 +275,16 @@ def get_token_values(tree):
 			outputs[leaf_key] = output
 	return outputs
 
+def get_value_batch(tree, leaf_token_map):
+	batch = []
+	leaf_nodes = {key:node for key, node in tree.items() if node['is_leaf']}
+	index_to_node = {str(node['index']): key for key, node in leaf_nodes.items()}
+	for i in range(len(leaf_nodes)):
+		if str(i) in index_to_node:
+			batch.append(leaf_token_map[index_to_node[str(i)]])
+	
+	batch = torch.tensor(batch)
+	return batch
 
 def get_evaluations(outputs, answer):
 	# expects a single answer, ie all outputs are for the same question
@@ -328,9 +338,9 @@ def train_loop(policy_model,
 			test_dataset,
 			tokenizer,
 			accelerator=None,
-			generate_batch=4096,
+			generate_batch=128,
 			train_steps=200000,
-			batch_size=16,
+			batch_size=8,
 			learning_rate=5e-4,
 			log_steps=10,
 			eval_steps=100,
@@ -375,8 +385,7 @@ def train_loop(policy_model,
 	reward_model, optimizer = accelerator.prepare(reward_model, optimizer)
 	
 	policy_model.eval()  # Freeze policy model
-	reward_model.train()
-	
+	reward_model.train()	
 	
 	# Split dataset across processes for DDP
 	if accelerator.num_processes > 1:
@@ -399,11 +408,11 @@ def train_loop(policy_model,
 		
 		question = data_element['question']
 		answer = data_element['answer']
-		
+		tokens_to_generate = 256
 		# Tokenize the question
 		input_ids = tokenizer.encode(question, 
 			return_tensors='pt', 
-			max_length=512, 
+			max_length=1024-tokens_to_generate, 
 			padding='max_length', 
 			padding_side='left').to(device)
 		
@@ -420,29 +429,26 @@ def train_loop(policy_model,
 			# Generate multiple completions
 			generated_ids = policy_model.generate(
 				input_ids.repeat(generate_batch, 1),
-				max_new_tokens=256,
+				max_new_tokens=tokens_to_generate,
 				do_sample=True,
 				temperature=0.7,
 				top_p=0.9,
 				pad_token_id=tokenizer.pad_token_id
-			)
+			).to('cpu')
 		
-		# Extract only the generated tokens (remove prompt)
+		# Remove prompt
 		prompt_length = input_ids.shape[1]
 		generated_tokens = generated_ids[:, prompt_length:]
 		
-		# Convert generations to tree structure
+		# Convert generations to tree structure, back up values, and process
 		tree = convert_generations_to_tree(generated_ids)
-		# Decode completions for evaluation
-		completions = tokenizer.decode(generated_tokens, skip_special_tokens=True)
-		# Score completions
+		completions = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
 		values = test_correctness(completions, answer)
-		# Backup values through tree
 		tree = tree_backup(tree, values)
-		# Get token-level values
 		token_values = get_token_values(tree)
 		token_sequences = get_token_sequences(tree)
-		
+				
+		value_batch = get_value_batch(tree, token_values)
 		# Train reward model with gradient accumulation
 		optimizer.zero_grad()
 		total_loss = 0.0
@@ -450,27 +456,20 @@ def train_loop(policy_model,
 		# Calculate gradient accumulation steps
 		num_leaves = len(token_sequences)
 		accumulation_steps = num_leaves // batch_size
+		#print (accumulation_steps, generated_ids.shape, prompt_length); return
 		for batch_idx in range(0, num_leaves, batch_size):
 			batch_end = min(batch_idx + batch_size, num_leaves)
-			batch_sequences = generated_ids[batch_idx:batch_end]
-			batch_values = token_values[batch_idx:batch_end]
-			
-			# Pad sequences to same length
-			max_len = max(len(seq) for seq in batch_sequences)
-			padded_sequences = []
-			for seq in batch_sequences:
-				padded = seq + [tokenizer.pad_token_id] * (max_len - len(seq))
-				padded_sequences.append(padded)
+			batch_ids = generated_ids[batch_idx:batch_end]
+			batch_values = value_batch[batch_idx:batch_end]
 			
 			# Convert to tensors
-			batch_input_ids = torch.tensor(padded_sequences, dtype=torch.long).to(device)
+			batch_input_ids = torch.tensor(batch_ids, dtype=torch.long).to(device)
 			batch_target_values = torch.tensor(batch_values, dtype=torch.float).to(device)
-			output, loss = reward_model(batch_input_ids)
+			output = reward_model(batch_input_ids, labels=batch_input_ids)
 			
 			# Scale loss by accumulation steps
-			loss = loss / accumulation_steps
+			loss = output.loss / accumulation_steps
 			accelerator.backward(loss)
-			
 			total_loss += loss.item()
 		
 		# Update weights after accumulation
