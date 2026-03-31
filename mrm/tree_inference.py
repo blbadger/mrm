@@ -203,7 +203,7 @@ def tree_backup(tree, values):
 					break
 				tree[parent_id]['value'].append(leaf_value)
 				key = tree[key]['parent']
-				
+
 	for key, node in tree.items():
 		node['value'] = sum(node['value']) / len(node['value'])
 	return tree
@@ -232,6 +232,26 @@ def get_token_sequences(tree):
 			outputs[leaf_key] = output
 	return outputs
 
+def get_token_values(tree):
+	# values shape: [b]
+	outputs = {} # maps node_id to output
+	for key, node in tree.items():
+		leaf_key = key
+		if node['is_leaf']:
+			leaf_key = key
+			value = node['value']
+			output = []
+			while True:
+				parent_id = tree[key]['parent']
+				value = tree[key]['value']
+				output.append(value)
+				if not parent_id:
+					break
+				key = parent_id
+			output.reverse()
+			outputs[leaf_key] = output
+	return outputs
+
 generations = torch.tensor([
    [0, 4, 5, 3],
    [0, 4, 4, 1],
@@ -242,28 +262,11 @@ generations = torch.tensor([
 values = [0, 1, 0, 0]
 
 tree = convert_generations_to_tree(generations)
-# print (tree.items())
 # print (get_token_sequences(tree))
-print (tree_backup(tree, values))
-
-def get_token_values(tree, values):
-	# values shape: [b]
-	outputs = {} # maps node_id to output
-	for key, node in tree.items():
-		if node['is_leaf']:
-			leaf_key = key
-			value = values[node['index']]
-			output = []
-			while True:
-				parent_id = tree[key]['parent']
-				value = tree[key]['value']
-				output.append(value)
-				if not parent_id:
-					break
-				key = parent_id
-			output.reverse()
-			outputs[key] = output
-	return outputs
+tree = tree_backup(tree, values)
+print (tree)
+print ('\n\n\n')
+print (get_token_values(tree))
 
 
 def get_evaluations(outputs, answer):
