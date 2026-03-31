@@ -577,10 +577,10 @@ if __name__ == "__main__":
 	print("Vocab size: ", n_vocab)
 
 	dataset = load_dataset("openai/gsm8k", "main")
-    train_dataset, eval_dataset = dataset['train'], dataset['test']
-    train_dataset = train_dataset.map(prepare_nshot, num_proc=16)
-    print (train_dataset[0])
-    eval_dataset = eval_dataset.map(prepare_nshot, num_proc=16)
+	train_dataset, eval_dataset = dataset['train'], dataset['test']
+	train_dataset = train_dataset.map(prepare_nshot, num_proc=16)
+	print (train_dataset[0])
+	eval_dataset = eval_dataset.map(prepare_nshot, num_proc=16)
 
 	tokenized_length = 1024
 	dim = 1024
@@ -598,7 +598,7 @@ if __name__ == "__main__":
 		mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True, is_reward_model=True).float().to(device)
 
 	model_path=f'{checkpoint_root}/gsm8k_SFT_srm_c1024/chkpt-300/model.safetensors'
-    load_model(policy_model, model_path)
+	load_model(policy_model, model_path)
 	policy_model = torch.compile(policy_model)
 	reward_model = torch.compile(reward_model)
 
