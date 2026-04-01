@@ -236,7 +236,7 @@ def test_correctness(completions, answer, **kwargs) -> list[float]:
 	extracted_answers = [answer_extract(answer) for _ in completions] # duplicate answer
 	#print('='*60, f"Question:\n{prompts[1]}", f"\nAnswer:\n{answer[1]}\n",'-'*50, f"\nResponse:\n{completions[1]}", f"\nExtracted:\n{extracted_responses[1]}\n")
 	#print (extracted_responses, answer_extract(answer))
-	values = [1.0 if r == a else 0.0 for r, a in zip(extracted_responses, extracted_answers)]
+	values = [10.0 if r == a else 0.0 for r, a in zip(extracted_responses, extracted_answers)]
 	return values
 
 def get_token_sequences(tree):
@@ -349,10 +349,10 @@ def train_loop(policy_model,
 			train_steps=200000,
 			batch_size=8,
 			learning_rate=1e-4,
-			log_steps=10,
+			log_steps=1,
 			eval_steps=100,
 			save_steps=100,
-			checkpoint_dir="{checkpoint-root}/tree_rm_b512"
+			checkpoint_dir=''
 			):
 	"""
 	Training loop that:
@@ -379,7 +379,7 @@ def train_loop(policy_model,
 	# Initialize accelerator if not provided
 	if accelerator is None:
 		ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
-		accelerator = Accelerator(kwargs_handlers=[ddp_kwargs])
+		accelerator = Accelerator(kwargs_handlers=[ddp_kwargs], mixed_precision='fp16')
 	
 	# Create checkpoint directory
 	if accelerator.is_main_process:
@@ -407,7 +407,8 @@ def train_loop(policy_model,
 		accelerator.print(f"Process {process_index}: Training on indices {start_idx} to {end_idx}")
 	else:
 		process_indices = list(range(len(train_dataset)))
-	
+
+	total_loss = 0.0	
 	for step in range(train_steps):
 		# Get a dataset element (cycle through process-specific indices)
 		local_idx = step % len(process_indices)
@@ -449,6 +450,7 @@ def train_loop(policy_model,
 		generated_tokens = generated_ids[:, prompt_length:]
 		
 		# Convert generations to tree structure, back up values, and process
+		print ('building and processing tree')
 		tree = convert_generations_to_tree(generated_ids)
 		completions = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
 		values = test_correctness(completions, answer)
@@ -456,51 +458,58 @@ def train_loop(policy_model,
 		token_values = get_token_values(tree)
 		token_sequences = get_token_sequences(tree)
 		num_leaves = len([node['value'] for node in tree.values() if node['is_leaf']])
-		correct_leaves = sum([node['value'] for node in tree.values() if node['is_leaf']])
+		correct_leaves = sum([node['value'] for node in tree.values() if node['is_leaf']]) / 10.
 		print (f'Correct paths: {correct_leaves}')		
 		value_batch = get_value_batch(tree, token_values)
+		print ("values found")
 		# Train reward model with gradient accumulation
-		optimizer.zero_grad()
-		total_loss = 0.0
 		
 		# Calculate gradient accumulation steps
 		num_leaves = len(token_sequences)
 		accumulation_steps = num_leaves // batch_size
+		print ('waiting for everyone')
+		accelerator.wait_for_everyone()
+		print ('training reward model')
 		for batch_idx in range(0, num_leaves, batch_size):
+			optimizer.zero_grad()
+			print ('optimizer zeroed')
 			batch_end = min(batch_idx + batch_size, num_leaves)
 			batch_ids = generated_ids[batch_idx:batch_end]
 			batch_values = value_batch[batch_idx:batch_end]
-			
+			print ('batch retrieved')
 			# Convert to tensors
 			batch_input_ids = torch.tensor(batch_ids, dtype=torch.long).to(device)
 			batch_target_values = torch.tensor(batch_values, dtype=torch.float).to(device)
+			print ('batch tensorized')
 			output = reward_model(batch_input_ids, labels=batch_input_ids)
-			
+			print ('output generated')
 			# Scale loss by accumulation steps
 			loss = output.loss
 			accelerator.backward(loss)
 			total_loss += loss.item()
 			optimizer.step()
+			print ('loss calculated and optim stepped')
+			accelerator.wait_for_everyone()
 		
 		# Logging
-		if step % log_steps == 0:
-			
-			accelerator.print(f"Step {step}: Loss={total_loss/(accumulation_steps * num_leaves * 1024):.4f}, Correct Leaves={correct_leaves:.4f}, Num Leaves={num_leaves}")
-		
+		if step % log_steps == 0:	
+			accelerator.print(f"Step {step}: Loss={total_loss/(log_steps * accumulation_steps * num_leaves * 1024):.4f}, Correct Leaves={correct_leaves:.4f}, Num Leaves={num_leaves}")
+			total_loss = 0.0
 		# Periodic evaluation (only on main process)
-		if step % eval_steps == 0 and test_dataset is not None and accelerator.is_main_process:
-			accelerator.print(f"Step {step}: Running evaluation...")
-			evaluate_model(policy_model, reward_model, test_dataset, tokenizer, device)
+		#if step % eval_steps == 0 and test_dataset is not None and accelerator.is_main_process:
+		#	accelerator.print(f"Step {step}: Running evaluation...")
+		#	evaluate_model(policy_model, reward_model, test_dataset, tokenizer, device)
 
 		# Save checkpoint (only on main process)
-		if step % save_steps == 0 and accelerator.is_main_process:
+		if step % save_steps == 0:# and accelerator.is_main_process:
 			checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint-{step}")
 			os.makedirs(checkpoint_path, exist_ok=True)
 			
 			# Unwrap model for saving
-			unwrapped_model = accelerator.unwrap_model(reward_model)
-			save_model(unwrapped_model, os.path.join(checkpoint_path, "model.safetensors"))
+			accelerator.wait_for_everyone() # Ensures all processes reach this point
+			accelerator.save_model(reward_model, os.path.join(checkpoint_path, "model.safetensors"))
 			accelerator.print(f"Saved checkpoint to {checkpoint_path}")
+		accelerator.wait_for_everyone()
 	
 	# Wait for all processes to finish
 	accelerator.wait_for_everyone()
@@ -508,7 +517,7 @@ def train_loop(policy_model,
 	return reward_model
 
 
-def evaluate_model(policy_model, reward_model, test_dataset, tokenizer, device, num_samples=100):
+def evaluate_model(policy_model, reward_model, test_dataset, tokenizer, device, num_samples=10):
 	"""Evaluate model on test dataset"""
 	policy_model.eval()
 	reward_model.eval()
@@ -607,4 +616,5 @@ if __name__ == "__main__":
 	policy_model = torch.compile(policy_model)
 	reward_model = torch.compile(reward_model)
 
-	train_loop(policy_model, reward_model, train_dataset,eval_dataset, tokenizer)
+	checkpoint_dir = f"{checkpoint_root}/gsm8k_tree_reward_b512"
+	train_loop(policy_model, reward_model, train_dataset,eval_dataset, tokenizer, checkpoint_dir=checkpoint_dir)
