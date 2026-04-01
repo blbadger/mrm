@@ -351,7 +351,7 @@ def train_loop(policy_model,
 			learning_rate=1e-4,
 			log_steps=10,
 			eval_steps=100,
-			save_steps=1000,
+			save_steps=100,
 			checkpoint_dir="{checkpoint-root}/tree_rm_b512"
 			):
 	"""
@@ -455,6 +455,7 @@ def train_loop(policy_model,
 		tree = tree_backup(tree, values)
 		token_values = get_token_values(tree)
 		token_sequences = get_token_sequences(tree)
+		num_leaves = len([node['value'] for node in tree.values() if node['is_leaf']])
 		correct_leaves = sum([node['value'] for node in tree.values() if node['is_leaf']])
 		print (f'Correct paths: {correct_leaves}')		
 		value_batch = get_value_batch(tree, token_values)
@@ -476,17 +477,15 @@ def train_loop(policy_model,
 			output = reward_model(batch_input_ids, labels=batch_input_ids)
 			
 			# Scale loss by accumulation steps
-			loss = output.loss / accumulation_steps
+			loss = output.loss
 			accelerator.backward(loss)
 			total_loss += loss.item()
-		
-		# Update weights after accumulation
-		optimizer.step()
+			optimizer.step()
 		
 		# Logging
 		if step % log_steps == 0:
-			avg_reward = sum(values) / len(values)
-			accelerator.print(f"Step {step}: Loss={total_loss/accumulation_steps:.4f}, Correct Leaves={correct_leaves:.4f}, Num Leaves={num_leaves}")
+			
+			accelerator.print(f"Step {step}: Loss={total_loss/(accumulation_steps * num_leaves * 1024):.4f}, Correct Leaves={correct_leaves:.4f}, Num Leaves={num_leaves}")
 		
 		# Periodic evaluation (only on main process)
 		if step % eval_steps == 0 and test_dataset is not None and accelerator.is_main_process:
@@ -494,7 +493,7 @@ def train_loop(policy_model,
 			evaluate_model(policy_model, reward_model, test_dataset, tokenizer, device)
 
 		# Save checkpoint (only on main process)
-		if step % save_steps == 0 and step > 0 and accelerator.is_main_process:
+		if step % save_steps == 0 and accelerator.is_main_process:
 			checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint-{step}")
 			os.makedirs(checkpoint_path, exist_ok=True)
 			
@@ -509,7 +508,7 @@ def train_loop(policy_model,
 	return reward_model
 
 
-def evaluate_model(policy_model, reward_model, test_dataset, tokenizer, device, num_samples=10):
+def evaluate_model(policy_model, reward_model, test_dataset, tokenizer, device, num_samples=100):
 	"""Evaluate model on test dataset"""
 	policy_model.eval()
 	reward_model.eval()
