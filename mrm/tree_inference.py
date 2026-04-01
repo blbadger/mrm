@@ -231,12 +231,12 @@ def tree_backup(tree, values):
 		node['value'] = sum(node['value']) / len(node['value'])
 	return tree
 
-def test_correctness(completions, answer, **kwargs) -> list[float]:
+def test_correctness(completions, answer, value_constant=1.0, **kwargs) -> list[float]:
 	extracted_responses = [output_extract(c) for c in completions] 
 	extracted_answers = [answer_extract(answer) for _ in completions] # duplicate answer
 	#print('='*60, f"Question:\n{prompts[1]}", f"\nAnswer:\n{answer[1]}\n",'-'*50, f"\nResponse:\n{completions[1]}", f"\nExtracted:\n{extracted_responses[1]}\n")
 	#print (extracted_responses, answer_extract(answer))
-	values = [10.0 if r == a else 0.0 for r, a in zip(extracted_responses, extracted_answers)]
+	values = [value_constant if r == a else 0.0 for r, a in zip(extracted_responses, extracted_answers)]
 	return values
 
 def get_token_sequences(tree):
@@ -347,11 +347,12 @@ def train_loop(policy_model,
 			accelerator=None,
 			generate_batch=512,
 			train_steps=200000,
-			batch_size=8,
+			batch_size=16,
 			learning_rate=1e-4,
+			value_constant=100.,
 			log_steps=1,
 			eval_steps=100,
-			save_steps=100,
+			save_steps=200,
 			checkpoint_dir=''
 			):
 	"""
@@ -444,7 +445,7 @@ def train_loop(policy_model,
 				top_p=0.9,
 				pad_token_id=tokenizer.pad_token_id
 			).to('cpu')
-		
+		accelerator.wait_for_everyone()	
 		# Remove prompt
 		prompt_length = input_ids.shape[1]
 		generated_tokens = generated_ids[:, prompt_length:]
@@ -453,44 +454,38 @@ def train_loop(policy_model,
 		print ('building and processing tree')
 		tree = convert_generations_to_tree(generated_ids)
 		completions = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
-		values = test_correctness(completions, answer)
+		values = test_correctness(completions, answer, value_constant)
 		tree = tree_backup(tree, values)
 		token_values = get_token_values(tree)
 		token_sequences = get_token_sequences(tree)
 		num_leaves = len([node['value'] for node in tree.values() if node['is_leaf']])
-		correct_leaves = sum([node['value'] for node in tree.values() if node['is_leaf']]) / 10.
-		print (f'Correct paths: {correct_leaves}')		
+		correct_leaves = sum([node['value'] for node in tree.values() if node['is_leaf']]) / value_constant
+		print (f'Correct paths: {correct_leaves}')	
 		value_batch = get_value_batch(tree, token_values)
-		print ("values found")
-		# Train reward model with gradient accumulation
 		
-		# Calculate gradient accumulation steps
+		# Online training batches
 		num_leaves = len(token_sequences)
+		pad_number = generate_batch - num_leaves
+		token_sequences = torch.cat((generated_ids, generated_ids[:pad_number]), dim=0)
+		num_leaves = len(generated_ids)
+		value_batch = torch.cat((value_batch, value_batch[:pad_number]), dim=0)
 		accumulation_steps = num_leaves // batch_size
-		print ('waiting for everyone')
 		accelerator.wait_for_everyone()
-		print ('training reward model')
-		for batch_idx in range(0, num_leaves, batch_size):
+		for batch_idx in range(0, len(generated_ids), batch_size):
 			optimizer.zero_grad()
-			print ('optimizer zeroed')
 			batch_end = min(batch_idx + batch_size, num_leaves)
 			batch_ids = generated_ids[batch_idx:batch_end]
 			batch_values = value_batch[batch_idx:batch_end]
-			print ('batch retrieved')
 			# Convert to tensors
 			batch_input_ids = torch.tensor(batch_ids, dtype=torch.long).to(device)
 			batch_target_values = torch.tensor(batch_values, dtype=torch.float).to(device)
-			print ('batch tensorized')
 			output = reward_model(batch_input_ids, labels=batch_input_ids)
-			print ('output generated')
 			# Scale loss by accumulation steps
 			loss = output.loss
 			accelerator.backward(loss)
 			total_loss += loss.item()
 			optimizer.step()
-			print ('loss calculated and optim stepped')
-			accelerator.wait_for_everyone()
-		
+			accelerator.wait_for_everyone()	
 		# Logging
 		if step % log_steps == 0:	
 			accelerator.print(f"Step {step}: Loss={total_loss/(log_steps * accumulation_steps * num_leaves * 1024):.4f}, Correct Leaves={correct_leaves:.4f}, Num Leaves={num_leaves}")
@@ -501,15 +496,24 @@ def train_loop(policy_model,
 		#	evaluate_model(policy_model, reward_model, test_dataset, tokenizer, device)
 
 		# Save checkpoint (only on main process)
-		if step % save_steps == 0:# and accelerator.is_main_process:
+		if step % save_steps == 0 and accelerator.is_main_process:
 			checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint-{step}")
 			os.makedirs(checkpoint_path, exist_ok=True)
+			# Manually unwrap model from DDP wrapper
+			if hasattr(reward_model, 'module'):
+				# Model is wrapped in DDP
+				unwrapped_model = reward_model.module
+			else:
+				unwrapped_model = reward_model
 			
-			# Unwrap model for saving
-			accelerator.wait_for_everyone() # Ensures all processes reach this point
-			accelerator.save_model(reward_model, os.path.join(checkpoint_path, "model.safetensors"))
+			# If model was compiled with torch.compile, unwrap that too
+			if hasattr(unwrapped_model, '_orig_mod'):
+				unwrapped_model = unwrapped_model._orig_mod
+			
+			save_model(unwrapped_model, os.path.join(checkpoint_path, "model.safetensors"))		
 			accelerator.print(f"Saved checkpoint to {checkpoint_path}")
 		accelerator.wait_for_everyone()
+	
 	
 	# Wait for all processes to finish
 	accelerator.wait_for_everyone()
