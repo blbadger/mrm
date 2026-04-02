@@ -118,6 +118,7 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 		self.cache_built = False
 
 	def forward(self, input_ids, labels=None, **kwargs):
+		print (labels)
 		is_recurrent = input_ids.shape[1] < self.seq_len
 		# mask pad tokens in labels for loss computation
 		if labels is not None:
@@ -355,34 +356,10 @@ def train_loop(policy_model,
 			save_steps=200,
 			checkpoint_dir=''
 			):
-	"""
-	Training loop that:
-	1. For each dataset element, generates `generate_batch` samples using policy model
-	2. Scores samples via convert_generations_to_tree, tree_backup, and get_token_values
-	3. Trains reward model on samples via gradient accumulation with batch_size
-	
-	Args:
-		policy_model: Model used for generation (frozen)
-		reward_model: Model to be trained
-		train_dataset: Training dataset with 'question' and 'answer' fields
-		test_dataset: Test dataset (optional, for evaluation)
-		tokenizer: Tokenizer for encoding/decoding
-		accelerator: Accelerate Accelerator instance (if None, creates one)
-		generate_batch: Number of samples to generate per dataset element
-		train_steps: Total number of training steps
-		batch_size: Batch size for gradient accumulation
-		learning_rate: Learning rate for optimizer
-		log_steps: Steps between logging
-		eval_steps: Steps between evaluation
-		save_steps: Steps between checkpoints
-		checkpoint_dir: Directory to save checkpoints
-	"""
-	# Initialize accelerator if not provided
 	if accelerator is None:
 		ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
 		accelerator = Accelerator(kwargs_handlers=[ddp_kwargs], mixed_precision='fp16')
 	
-	# Create checkpoint directory
 	if accelerator.is_main_process:
 		os.makedirs(checkpoint_dir, exist_ok=True)
 	device = accelerator.device
@@ -390,7 +367,6 @@ def train_loop(policy_model,
 	policy_model = policy_model.to(device)
 	optimizer = torch.optim.AdamW(reward_model.parameters(), lr=learning_rate)
 	
-	# Prepare models and optimizer with accelerator
 	reward_model, optimizer = accelerator.prepare(reward_model, optimizer)
 	
 	policy_model.eval()  # Freeze policy model
@@ -419,14 +395,13 @@ def train_loop(policy_model,
 		question = data_element['question']
 		answer = data_element['answer']
 		tokens_to_generate = 256
-		# Tokenize the question
+
 		input_ids = tokenizer.encode(question, 
 			return_tensors='pt', 
 			max_length=1024-tokens_to_generate, 
 			padding='max_length', 
 			padding_side='left').to(device)
 		
-		# Generate samples using policy model
 		if accelerator.is_main_process:
 			accelerator.print(f"Step {step}/{train_steps}: Generating {generate_batch} samples per question...")
 
@@ -436,7 +411,6 @@ def train_loop(policy_model,
 			policy_model.clear_cache()
 		
 		with torch.no_grad():
-			# Generate multiple completions
 			generated_ids = policy_model.generate(
 				input_ids.repeat(generate_batch, 1),
 				max_new_tokens=tokens_to_generate,
@@ -446,7 +420,6 @@ def train_loop(policy_model,
 				pad_token_id=tokenizer.pad_token_id
 			).to('cpu')
 		accelerator.wait_for_everyone()	
-		# Remove prompt
 		prompt_length = input_ids.shape[1]
 		generated_tokens = generated_ids[:, prompt_length:]
 		
@@ -476,16 +449,15 @@ def train_loop(policy_model,
 			batch_end = min(batch_idx + batch_size, num_leaves)
 			batch_ids = generated_ids[batch_idx:batch_end]
 			batch_values = value_batch[batch_idx:batch_end]
-			# Convert to tensors
 			batch_input_ids = torch.tensor(batch_ids, dtype=torch.long).to(device)
 			batch_target_values = torch.tensor(batch_values, dtype=torch.float).to(device)
 			output = reward_model(batch_input_ids, labels=batch_input_ids)
-			# Scale loss by accumulation steps
 			loss = output.loss
 			accelerator.backward(loss)
 			total_loss += loss.item()
 			optimizer.step()
 			accelerator.wait_for_everyone()	
+			
 		# Logging
 		if step % log_steps == 0:	
 			accelerator.print(f"Step {step}: Loss={total_loss/(log_steps * accumulation_steps * num_leaves * 1024):.4f}, Correct Leaves={correct_leaves:.4f}, Num Leaves={num_leaves}")
@@ -499,25 +471,17 @@ def train_loop(policy_model,
 		if step % save_steps == 0 and accelerator.is_main_process:
 			checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint-{step}")
 			os.makedirs(checkpoint_path, exist_ok=True)
-			# Manually unwrap model from DDP wrapper
 			if hasattr(reward_model, 'module'):
-				# Model is wrapped in DDP
 				unwrapped_model = reward_model.module
 			else:
 				unwrapped_model = reward_model
-			
-			# If model was compiled with torch.compile, unwrap that too
+
 			if hasattr(unwrapped_model, '_orig_mod'):
 				unwrapped_model = unwrapped_model._orig_mod
 			
 			save_model(unwrapped_model, os.path.join(checkpoint_path, "model.safetensors"))		
 			accelerator.print(f"Saved checkpoint to {checkpoint_path}")
 		accelerator.wait_for_everyone()
-	
-	
-	# Wait for all processes to finish
-	accelerator.wait_for_everyone()
-
 	return reward_model
 
 
