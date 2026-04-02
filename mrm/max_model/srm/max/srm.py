@@ -327,13 +327,13 @@ if __name__ == "__main__":
     dtype, device = defaults()
     input_string = 'Four score and seven years ago, our forefathers, for the purpose of creating'
     input_tokens = tokenizer(input_string, return_tensors='pt').input_ids[:, 1].unsqueeze(1).to(torch.int64) # no BOS token
-    batch_size = 500000
+    batch_size = 5
     input_tokens = input_tokens.repeat(batch_size, 1)
 
     length = torch.tensor([input_tokens.shape[1]]).to(torch.int64)
     tokenized_length = 512
     dim = 1024
-    layers = 8
+    layers = 16
     n_heads = 4
     kernel= 1
 

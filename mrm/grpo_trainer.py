@@ -192,19 +192,20 @@ if __name__ == '__main__':
         lr_scheduler_type = "cosine",
         optim = "adamw_torch",
         logging_steps = 1,
-        per_device_train_batch_size=1024,
+        per_device_train_batch_size=100,
         gradient_accumulation_steps=1,
-        num_generations = 512, 
+        num_generations = 50, 
         #max_prompt_length = max_prompt_length,
         max_completion_length = tokenized_length - max_prompt_length,
-        num_train_epochs = 10,
-        save_steps = 50,
+        num_train_epochs = 12,
+        save_steps = 100,
         max_grad_norm = 0.1,
         report_to = "none",
         output_dir = output_dir,
         fp16=True,
         beta=0.,
         torch_compile=True, 
+        #beta=0., 
         temperature = 0.7, # NB: top_p=0.9 supplied directly to generate in grpo_trainer
 )
 	
@@ -219,4 +220,4 @@ if __name__ == '__main__':
         eval_dataset = eval_dataset
     )
     #training_args.save_json(output_dir + '/checkpoint-1250')
-    trainer.train()
+    trainer.train(output_dir + '/checkpoint-700')
