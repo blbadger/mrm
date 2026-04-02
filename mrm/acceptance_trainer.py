@@ -20,7 +20,7 @@ import shutil
 from repeat_main import MLPMixer
 from cached_inference import CachedMLPMixer
 from recurrent_inference import RecurrentMLPMixer
-from dual_mixer import DualMLPMixer
+from dual_srm import DualMLPMixer
 from transformers import TrainerCallback
 
 class DualMixer(DualMLPMixer, GenerationMixin):
@@ -106,7 +106,7 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 			x = block(x, index, is_recurrent)
 		logits = self.output_layer(x).unsqueeze(1)
 		if labels is not None:
-			shift_logits = logits[:, :-1].contiguous()
+			shift_logits = logits.squeeze(1)[:, :-1].contiguous()
 			shift_labels = labels[:, 1:].contiguous()
 			shift_logits = shift_logits.view(-1, self.vocab_size)
 			shift_labels = shift_labels.view(-1)
@@ -122,16 +122,23 @@ def answer_extract(answer):
 	return cleaned_output
 
 def output_extract(predicted_output):
+	if isinstance(predicted_output, list):
+		predicted_output = predicted_output[0]
 	output = re.findall("(-?[$0-9.,]{2,})|(-?[0-9]+)", predicted_output)
 	if output:
-		output = output[-1]
+		output = output[-1] # matches last pattern
 	outs = []
-	for i, out in enumerate(output):
-		if isinstance(out, tuple) and len(out) > 1: 
-		   outs.append((out[0] if out[0] else out[1]).strip(' %$@!*,.'))
+	#print (output)
+	if (isinstance(output, tuple) or isinstance(output, list)) and len(output) > 1: 
+		outs.append((output[0] if output[0] else output[1]).strip(' %$@!*,.'))
+	else:
+		if not output:
+			outs.append('')
 		else:
-		   outs.append(out)
-	return outs
+			outs.append(output.strip(' %$@!*,.'))
+	cleaned_output = outs[0]
+	return cleaned_output
+
 
 def test_correctness(completions, answers, **kwargs) -> list[float]:
 	extracted_responses = [output_extract(c) for c in completions] 
@@ -140,14 +147,13 @@ def test_correctness(completions, answers, **kwargs) -> list[float]:
 	return values
 
 def train_loop(policy_model,
-			reward_model,
 			train_dataset,
 			test_dataset,
 			tokenizer,
 			accelerator=None,
-			generate_batch=512,
+			generate_batch=2048,
 			train_steps=200000,
-			batch_size=16,
+			batch_size=128,
 			learning_rate=1e-4,
 			value_constant=100.,
 			log_steps=1,
@@ -183,16 +189,17 @@ def train_loop(policy_model,
 	for step in range(train_steps):
 		local_indices = step % len(process_indices)
 		# TODO: deal with more than one input query per batch
-		data_idx = process_indices[local_idices]
-		data_elements = train_dataset[data_indices]
+		data_idx = process_indices[local_indices]
+		data_elements = train_dataset[local_indices]
 		
 		questions = data_elements['question']
 		answers = data_elements['answer']
 		tokens_to_generate = 256
+		n_ctx = 1024
 		# Tokenize the question
 		input_ids = tokenizer.encode(questions, 
 			return_tensors='pt', 
-			max_length=1024-tokens_to_generate, 
+			max_length=n_ctx-tokens_to_generate, 
 			padding='max_length', 
 			padding_side='left').to(device)
 		
@@ -207,7 +214,7 @@ def train_loop(policy_model,
 		
 		with torch.no_grad():
 			generated_ids = policy_model.generate(
-				input_ids.repeat_interleave(generate_batch, 1),
+				input_ids.repeat(generate_batch, 1),
 				max_new_tokens=tokens_to_generate,
 				do_sample=True,
 				temperature=0.7,
@@ -219,10 +226,11 @@ def train_loop(policy_model,
 		prompt_length = input_ids.shape[1]
 		generated_tokens = generated_ids[:, prompt_length:]
 		generated_strings = tokenizer.batch_decode(generated_tokens)
-		expanded_answers = torch.repeat_interleave(answers, generate_batch)
+		expanded_answers = [answers for _ in range(generate_batch)]
 		values = test_correctness(generated_strings, expanded_answers)
 		# Acceptance training (online)
-		good_indices = [i for i in range(len(expanded_answers)) if expanded_answers[i] == 1.]
+		good_indices = [i for i in range(len(values)) if values[i] == 1.]
+		print (f'Number of good outputs: {len(good_indices)}')
 		good_generations = generated_ids[good_indices, :]
 		accelerator.wait_for_everyone()
 		for batch_idx in range(0, len(good_generations), batch_size):
@@ -230,9 +238,10 @@ def train_loop(policy_model,
 			batch_end = min(batch_idx + batch_size, len(good_generations))
 			batch_ids = generated_ids[batch_idx:batch_end]
 
-			batch_input_ids = torch.tensor(batch_ids, dtype=torch.long).to(device)
-			batch_labels = torch.tensor(batch_ids, dtype=torch.long).to(device)
-			batch_labels[-tokens_to_generate:, :] = torch.ones((tokens_to_generate, batch_labels.shape[1])) * -100 # mask loss on input
+			batch_input_ids = batch_ids.to(device)
+			batch_labels = torch.clone(batch_input_ids)
+			batch_labels[:, :n_ctx-tokens_to_generate] = torch.ones((batch_labels.shape[0], n_ctx-tokens_to_generate)) * -100 # mask loss on input
+			
 			output = policy_model(batch_input_ids, labels=batch_labels)
 
 			loss = output.loss
@@ -303,14 +312,13 @@ if __name__ == '__main__':
 	eval_dataset = eval_dataset.map(prepare_nshot, num_proc=16)
 	
 	print (len(train_dataset))
-	model_path=f'{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
-	#model_path=f'{checkpoint_root}/finemath_srm_h4_mixed_decay_nonparallel_projs_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
+	#model_path=f'{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
+	model_path=f'{checkpoint_root}/gsm8k_sft_srm_c1024/checkpoint-1100/model.safetensors'
 	load_model(model, model_path)
 	print ('pretrained model loaded')
 	response_template = '|'
-	collator = DataCollatorForCompletionOnlyLM(response_template, tokenizer=tokenizer, pad_to_multiple_of=1024)
 
 	output_dir = f'{checkpoint_root}/gsm8k_acceptance_sampling'
 
 	model.train()
-	train_loop(model)
+	train_loop(model, train_dataset, eval_dataset, tokenizer, checkpoint_dir=output_dir)
