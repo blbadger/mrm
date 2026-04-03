@@ -153,8 +153,8 @@ def train_loop(policy_model,
 			accelerator=None,
 			generate_batch=2048,
 			train_steps=200000,
-			batch_size=128,
-			learning_rate=1e-4,
+			batch_size=64,
+			learning_rate=2e-5,
 			value_constant=100.,
 			log_steps=1,
 			eval_steps=100,
@@ -181,7 +181,7 @@ def train_loop(policy_model,
 		start_idx = process_index * indices_per_process
 		end_idx = start_idx + indices_per_process if process_index < num_processes - 1 else dataset_size
 		process_indices = list(range(start_idx, end_idx))
-		accelerator.print(f"Process {process_index}: Training on indices {start_idx} to {end_idx}")
+		print(f"Process {process_index}: Training on indices {start_idx} to {end_idx}")
 	else:
 		process_indices = list(range(len(train_dataset)))
 
@@ -240,7 +240,7 @@ def train_loop(policy_model,
 
 			batch_input_ids = batch_ids.to(device)
 			batch_labels = torch.clone(batch_input_ids)
-			batch_labels[:, :n_ctx-tokens_to_generate] = torch.ones((batch_labels.shape[0], n_ctx-tokens_to_generate)) * -100 # mask loss on input
+			#batch_labels[:, :n_ctx-tokens_to_generate] = torch.ones((batch_labels.shape[0], n_ctx-tokens_to_generate)) * -100 # mask loss on input
 			
 			output = policy_model(batch_input_ids, labels=batch_labels)
 
@@ -251,7 +251,7 @@ def train_loop(policy_model,
 			accelerator.wait_for_everyone()	
 
 		if step % log_steps == 0:
-			accelerator.print(f"Step {step}: Loss={total_loss/(log_steps * 256):.4f}")
+			accelerator.print(f"Step {step}: Loss={total_loss/(log_steps):.4f}")
 			total_loss = 0.0
 
 		# Save checkpoint (only on main process)
