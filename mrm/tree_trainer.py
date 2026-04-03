@@ -127,10 +127,12 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 		index = input_ids.shape[1] - 1
 		if is_recurrent:
 			input_ids = input_ids[:, -1] # last token only
+
 		# model's forward pass
 		x = self.input_layer(input_ids)
 		for block in self.mixer_blocks:
 			x = block(x, index, is_recurrent)
+
 		if not self.is_reward_model:
 			logits = self.output_layer(x).unsqueeze(1)
 		else:
@@ -139,8 +141,8 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 			if labels is not None:
 				loss = self.loss_fn(output, labels)
 			else:
-				loss= 0
-			return CausalLMOutput(loss=loss, logits=output)
+				loss = 0
+			return CausalLMOutput(loss=loss, logits=input_ids, reward=output)
 
 		# policy model output
 		if labels is not None:
@@ -544,59 +546,85 @@ def tree_selection_evaluation(policy_model, reward_model, test_dataset, tokenize
 
 		completions = tokenizer.batch_decode(selected_samples[:, -tokens_to_generate:], skip_special_tokens=True)
 		values = test_correctness(completions, answer)
-		total_correct += sum(values)
+		has_correct = sum(values) > 0
+		if has_correct:
+			total_correct += 1
 		total_samples += 1
 	
 	accuracy = total_correct / total_samples if total_samples > 0 else 0
 	print(f"Top{k} accuracy: {accuracy:.4f} ({total_correct}/{total_samples})")
 	return accuracy
 
-def tree_expansion_evaluation(policy_model, reward_model, test_dataset, tokenizer, device, num_eval_items=2, samples_per_item=512, batch_size=16, k=2):
+def tree_expansion_evaluation(
+	policy_model, 
+	reward_model, 
+	test_dataset, 
+	tokenizer, 
+	device, 
+	num_eval_items=2, 
+	samples_per_item=512, 
+	k=2, 
+	expansion_factor=2, 
+	tokens_unil_expansion=10
+	):
 	"""
-	Computes the top-k accuracy using reward model branch selection
+	Computes the top-k accuracy using reward model branch selection. 
+
+	Approach: samples_per_item // expansion_factor items are copied expanded
+	every tokens_until_expansion step.
 	"""
 	policy_model.eval()
 	reward_model.eval()
 	total_correct = 0
 	total_samples = 0
 	tokens_to_generate=256
+	context_limit = policy_model.seq_len
 
 	samples = test_dataset[:num_eval_items]
 	questions = samples['question']
 	answers = samples['answer']
 	input_ids = tokenizer.encode(questions, 
 		return_tensors='pt', 
-		max_length=1024-tokens_to_generate,
+		max_length=context_limit-tokens_to_generate,
 		padding='max_length', 
 		padding_side='left').to(device)
+
+	assert samples_per_item % expansion_factor == 0, 'Expansion factor should divide samples_per_item'
+	samples_to_keep = samples_per_item // expansion_factor
 	
 	for i in range(num_eval_items):
-		expanded_input_ids = input_ids[i].repeat(samples_per_item, 1).to(device)
+		input_ids = input_ids[i].repeat(samples_per_item, 1).to(device)
 		answer = answers[i]
 		policy_model.clear_cache()
 		reward_model.clear_cache()
-		
-		# generate tree
-		generated_ids = policy_model.generate(
-			expanded_input_ids,
-			max_new_tokens=tokens_to_generate,
-			do_sample=False,
-			pad_token_id=tokenizer.pad_token_id
-		)
-		# batch computation for final rewards
-		all_rewards = []
-		for i in range(0, samples_per_item, batch_size):
-			start = i
-			end = i + batch_size
-			final_rewards = reward_model(generated_ids[start:end, :]).logits[:, -1]
-			all_rewards.append(final_rewards)
-		all_rewards = torch.cat(all_rewards, dim=0)
-		top_indices = torch.topk(all_rewards, k).indices
-		selected_samples = generated_ids[top_indices, :]
+		current_length = input_ids.shape[1]
+		while current_length < context_limit:
+			new_tokens = min(context_limit - current_length, tokens_until_expansion)
+			# generate tree
+			input_ids = policy_model.generate(
+				input_ids,
+				max_new_tokens=new_tokens,
+				do_sample=False,
+				pad_token_id=tokenizer.pad_token_id
+			)
+			# generate rewards via recurrent forwards
+			for i in range(new_tokens):
+				output = reward_model.forward(input_ids[:, :current_length+i])
 
+			last_rewards = output.reward[:, -1]
+			top_indices = torch.topk(last_rewards, samples_to_keep).indices
+			selected_samples = generated_ids[top_indices, :]
+			generated_ids = selected_samples
+			current_length = input_ids.shape[1]
+
+		# leaf selection for top k nodes
+		top_indices = torch.topk(last_rewards, k).indices
+		selected_samples = generated_ids[top_indices, :]
 		completions = tokenizer.batch_decode(selected_samples[:, -tokens_to_generate:], skip_special_tokens=True)
 		values = test_correctness(completions, answer)
-		total_correct += sum(values)
+		has_correct = sum(values) > 0
+		if has_correct:
+			total_correct += 1
 		total_samples += 1
 	
 	accuracy = total_correct / total_samples if total_samples > 0 else 0
