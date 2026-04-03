@@ -118,7 +118,6 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 		self.cache_built = False
 
 	def forward(self, input_ids, labels=None, **kwargs):
-		print (labels)
 		is_recurrent = input_ids.shape[1] < self.seq_len
 		# mask pad tokens in labels for loss computation
 		if labels is not None:
@@ -277,16 +276,27 @@ def get_token_values(tree):
 			outputs[leaf_key] = output
 	return outputs
 
-def get_value_batch(tree, leaf_token_map):
+def get_value_batch(tree, leaf_value_map):
 	batch = []
 	leaf_nodes = {key:node for key, node in tree.items() if node['is_leaf']}
 	index_to_node = {str(node['index']): key for key, node in leaf_nodes.items()}
 	for i in range(len(leaf_nodes)):
 		if str(i) in index_to_node:
-			batch.append(leaf_token_map[index_to_node[str(i)]])
+			batch.append(leaf_value_map[index_to_node[str(i)]])
 	
 	batch = torch.tensor(batch)
 	return batch
+
+def get_token_batch(tree, leaf_token_map):
+        batch = []
+        leaf_nodes = {key:node for key, node in tree.items() if node['is_leaf']}
+        index_to_node = {str(node['index']): key for key, node in leaf_nodes.items()}
+        for i in range(len(leaf_nodes)):
+                if str(i) in index_to_node:
+                        batch.append(leaf_token_map[index_to_node[str(i)]])
+    
+        batch = torch.tensor(batch)
+        return batch
 
 def get_evaluations(outputs, answer):
 	# expects a single answer, ie all outputs are for the same question
@@ -350,7 +360,7 @@ def train_loop(policy_model,
 			train_steps=200000,
 			batch_size=16,
 			learning_rate=1e-4,
-			value_constant=100.,
+			value_constant=10.,
 			log_steps=1,
 			eval_steps=100,
 			save_steps=200,
@@ -435,23 +445,25 @@ def train_loop(policy_model,
 		correct_leaves = sum([node['value'] for node in tree.values() if node['is_leaf']]) / value_constant
 		print (f'Correct paths: {correct_leaves}')	
 		value_batch = get_value_batch(tree, token_values)
+		token_batch = get_token_batch(tree, token_sequences)
 		
 		# Online training batches
 		num_leaves = len(token_sequences)
 		pad_number = generate_batch - num_leaves
-		token_sequences = torch.cat((generated_ids, generated_ids[:pad_number]), dim=0)
-		num_leaves = len(generated_ids)
+		
+		token_sequences = torch.cat((token_batch, token_batch[:pad_number]), dim=0)
 		value_batch = torch.cat((value_batch, value_batch[:pad_number]), dim=0)
-		accumulation_steps = num_leaves // batch_size
+		num_samples = token_sequences.shape[0]
+		accumulation_steps = num_samples // batch_size
 		accelerator.wait_for_everyone()
 		for batch_idx in range(0, len(generated_ids), batch_size):
 			optimizer.zero_grad()
-			batch_end = min(batch_idx + batch_size, num_leaves)
+			batch_end = min(batch_idx + batch_size, num_samples)
 			batch_ids = generated_ids[batch_idx:batch_end]
 			batch_values = value_batch[batch_idx:batch_end]
 			batch_input_ids = torch.tensor(batch_ids, dtype=torch.long).to(device)
 			batch_target_values = torch.tensor(batch_values, dtype=torch.float).to(device)
-			output = reward_model(batch_input_ids, labels=batch_input_ids)
+			output = reward_model(batch_input_ids, labels=batch_target_values)
 			loss = output.loss
 			accelerator.backward(loss)
 			total_loss += loss.item()
@@ -460,7 +472,7 @@ def train_loop(policy_model,
 			
 		# Logging
 		if step % log_steps == 0:	
-			accelerator.print(f"Step {step}: Loss={total_loss/(log_steps * accumulation_steps * num_leaves * 1024):.4f}, Correct Leaves={correct_leaves:.4f}, Num Leaves={num_leaves}")
+			accelerator.print(f"Step {step}: Loss={total_loss/(log_steps * accumulation_steps):.4f}, Correct Leaves={correct_leaves:.4f}, Num Leaves={num_leaves}")
 			total_loss = 0.0
 		# Periodic evaluation (only on main process)
 		#if step % eval_steps == 0 and test_dataset is not None and accelerator.is_main_process:
