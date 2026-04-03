@@ -117,6 +117,12 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 				block.token_mixing_layer.mixer_heads[h].cache = torch.zeros(self.hidden_dim//self.n_heads).to('cuda') # only for mixed heads
 		self.cache_built = False
 
+	def select_and_expand_cache(self, top_indices, expansion_factor):
+		for block in self.mixer_blocks:
+			for h in range(len(block.token_mixing_layer.mixer_heads)):
+				block.token_mixing_layer.mixer_heads[h].cache = block.token_mixing_layer.mixer_heads[h].cache[top_indices, :].repeat(expansion_factor, 1)
+
+
 	def forward(self, input_ids, labels=None, **kwargs):
 		is_recurrent = input_ids.shape[1] < self.seq_len
 		# mask pad tokens in labels for loss computation
@@ -568,7 +574,7 @@ def tree_expansion_evaluation(
 	tokens_unil_expansion=10
 	):
 	"""
-	Computes the top-k accuracy using reward model branch selection. 
+	Computes the top-k accuracy using reward model branch expansion and selection
 
 	Approach: samples_per_item // expansion_factor items are copied expanded
 	every tokens_until_expansion step.
@@ -613,13 +619,16 @@ def tree_expansion_evaluation(
 
 			last_rewards = output.reward[:, -1]
 			top_indices = torch.topk(last_rewards, samples_to_keep).indices
-			selected_samples = generated_ids[top_indices, :]
-			generated_ids = selected_samples
+			selected_samples = input_ids[top_indices, :]
+			input_ids = selected_samples.repeat(expansion_factor, 1)
+			# expand caches
+			reward_model.select_and_expand_cache(top_indices, expansion_factor)
+			policy_model.select_and_expand_cache(top_indices, expansion_factor)
 			current_length = input_ids.shape[1]
 
 		# leaf selection for top k nodes
 		top_indices = torch.topk(last_rewards, k).indices
-		selected_samples = generated_ids[top_indices, :]
+		selected_samples = input_ids[top_indices, :]
 		completions = tokenizer.batch_decode(selected_samples[:, -tokens_to_generate:], skip_special_tokens=True)
 		values = test_correctness(completions, answer)
 		has_correct = sum(values) > 0
