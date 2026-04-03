@@ -497,41 +497,110 @@ def train_loop(policy_model,
 	return reward_model
 
 
-def evaluate_model(policy_model, reward_model, test_dataset, tokenizer, device, num_samples=10):
-	"""Evaluate model on test dataset"""
+
+@torch.no_grad()
+def tree_selection_evaluation(policy_model, reward_model, test_dataset, tokenizer, device, num_eval_items=2, samples_per_item=512, batch_size=16, k=2):
+	"""
+	Computes the top-k accuracy using reward model branch selection
+	"""
 	policy_model.eval()
 	reward_model.eval()
-	
 	total_correct = 0
 	total_samples = 0
+	tokens_to_generate=256
+
+	samples = test_dataset[:num_eval_items]
+	questions = samples['question']
+	answers = samples['answer']
+	input_ids = tokenizer.encode(questions, 
+		return_tensors='pt', 
+		max_length=1024-tokens_to_generate,
+		padding='max_length', 
+		padding_side='left').to(device)
 	
-	with torch.no_grad():
-		for i in range(min(num_samples, len(test_dataset))):
-			data_element = test_dataset[i]
-			question = data_element['question']
-			answer = data_element['answer']
-			
-			input_ids = tokenizer.encode(question, return_tensors='pt').to(device)
-			policy_model.clear_cache()
-			
-			generated_ids = policy_model.generate(
-				input_ids,
-				max_new_tokens=256,
-				do_sample=False,
-				pad_token_id=tokenizer.pad_token_id
-			)
-			
-			completion = tokenizer.decode(generated_ids[0, input_ids.shape[1]:], skip_special_tokens=True)
-			values = test_correctness([completion], answer)
-			total_correct += values[0]
-			total_samples += 1
+	for i in range(num_eval_items):
+		expanded_input_ids = input_ids[i].repeat(samples_per_item, 1).to(device)
+		answer = answers[i]
+		policy_model.clear_cache()
+		reward_model.clear_cache()
+		
+		# generate tree
+		generated_ids = policy_model.generate(
+			expanded_input_ids,
+			max_new_tokens=tokens_to_generate,
+			do_sample=False,
+			pad_token_id=tokenizer.pad_token_id
+		)
+		# batch computation for final rewards
+		all_rewards = []
+		for i in range(0, samples_per_item, batch_size):
+			start = i
+			end = i + batch_size
+			final_rewards = reward_model(generated_ids[start:end, :]).logits[:, -1]
+			all_rewards.append(final_rewards)
+		all_rewards = torch.cat(all_rewards, dim=0)
+		top_indices = torch.topk(all_rewards, k).indices
+		selected_samples = generated_ids[top_indices, :]
+
+		completions = tokenizer.batch_decode(selected_samples[:, -tokens_to_generate:], skip_special_tokens=True)
+		values = test_correctness(completions, answer)
+		total_correct += sum(values)
+		total_samples += 1
 	
 	accuracy = total_correct / total_samples if total_samples > 0 else 0
-	print(f"Evaluation Accuracy: {accuracy:.4f} ({total_correct}/{total_samples})")
+	print(f"Top{k} accuracy: {accuracy:.4f} ({total_correct}/{total_samples})")
+	return accuracy
+
+def tree_expansion_evaluation(policy_model, reward_model, test_dataset, tokenizer, device, num_eval_items=2, samples_per_item=512, batch_size=16, k=2):
+	"""
+	Computes the top-k accuracy using reward model branch selection
+	"""
+	policy_model.eval()
+	reward_model.eval()
+	total_correct = 0
+	total_samples = 0
+	tokens_to_generate=256
+
+	samples = test_dataset[:num_eval_items]
+	questions = samples['question']
+	answers = samples['answer']
+	input_ids = tokenizer.encode(questions, 
+		return_tensors='pt', 
+		max_length=1024-tokens_to_generate,
+		padding='max_length', 
+		padding_side='left').to(device)
 	
-	policy_model.train()
-	reward_model.train()
+	for i in range(num_eval_items):
+		expanded_input_ids = input_ids[i].repeat(samples_per_item, 1).to(device)
+		answer = answers[i]
+		policy_model.clear_cache()
+		reward_model.clear_cache()
+		
+		# generate tree
+		generated_ids = policy_model.generate(
+			expanded_input_ids,
+			max_new_tokens=tokens_to_generate,
+			do_sample=False,
+			pad_token_id=tokenizer.pad_token_id
+		)
+		# batch computation for final rewards
+		all_rewards = []
+		for i in range(0, samples_per_item, batch_size):
+			start = i
+			end = i + batch_size
+			final_rewards = reward_model(generated_ids[start:end, :]).logits[:, -1]
+			all_rewards.append(final_rewards)
+		all_rewards = torch.cat(all_rewards, dim=0)
+		top_indices = torch.topk(all_rewards, k).indices
+		selected_samples = generated_ids[top_indices, :]
+
+		completions = tokenizer.batch_decode(selected_samples[:, -tokens_to_generate:], skip_special_tokens=True)
+		values = test_correctness(completions, answer)
+		total_correct += sum(values)
+		total_samples += 1
 	
+	accuracy = total_correct / total_samples if total_samples > 0 else 0
+	print(f"Top{k} accuracy: {accuracy:.4f} ({total_correct}/{total_samples})")
 	return accuracy
 
 
@@ -598,3 +667,8 @@ if __name__ == "__main__":
 
 	checkpoint_dir = f"{checkpoint_root}/gsm8k_tree_reward_b512"
 	train_loop(policy_model, reward_model, train_dataset,eval_dataset, tokenizer, checkpoint_dir=checkpoint_dir)
+	device = 'cuda:0'
+	policy_model = policy_model.to(device)
+	reward_model = reward_model.to(device)
+	evaluate_models(policy_model, reward_model, eval_dataset, tokenizer, device)
+
