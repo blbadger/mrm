@@ -26,6 +26,7 @@ import warnings
 import time
 import uuid
 import pprint
+from tqdm import tqdm
 warnings.simplefilter(action='ignore', category=UserWarning)
 
 
@@ -148,7 +149,7 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 				loss = self.loss_fn(output, labels)
 			else:
 				loss = 0
-			return CausalLMOutput(loss=loss, logits=input_ids, reward=output)
+			return CausalLMOutput(loss=loss, logits=output)
 
 		# policy model output
 		if labels is not None:
@@ -404,7 +405,7 @@ def train_loop(policy_model,
 		process_indices = list(range(len(train_dataset)))
 
 	total_loss = 0.0	
-	for step in range(train_steps):
+	for step in tqdm(range(train_steps)):
 		# Get a dataset element (cycle through process-specific indices)
 		local_idx = step % len(process_indices)
 		data_idx = process_indices[local_idx]
@@ -413,7 +414,6 @@ def train_loop(policy_model,
 		question = data_element['question']
 		answer = data_element['answer']
 		tokens_to_generate = 256
-
 		input_ids = tokenizer.encode(question, 
 			return_tensors='pt', 
 			max_length=1024-tokens_to_generate, 
@@ -507,7 +507,7 @@ def train_loop(policy_model,
 
 
 @torch.no_grad()
-def tree_selection_evaluation(policy_model, reward_model, test_dataset, tokenizer, device, num_eval_items=1, samples_per_item=512, batch_size=16, k=1):
+def tree_selection_evaluation(policy_model, reward_model, test_dataset, tokenizer, device, num_eval_items=10, samples_per_item=512, batch_size=16, k=10):
 	"""
 	Computes the top-k accuracy using reward model branch selection
 	"""
@@ -520,13 +520,13 @@ def tree_selection_evaluation(policy_model, reward_model, test_dataset, tokenize
 	samples = test_dataset[:num_eval_items]
 	questions = samples['question']
 	answers = samples['answer']
-	input_ids = tokenizer.encode(questions, 
+	input_ids = tokenizer.batch_encode_plus(questions, 
 		return_tensors='pt', 
 		max_length=1024-tokens_to_generate,
 		padding='max_length', 
-		padding_side='left').to(device)
+		padding_side='left').input_ids.to(device)
 	
-	for i in range(num_eval_items):
+	for i in tqdm(range(num_eval_items)):
 		expanded_input_ids = input_ids[i].repeat(samples_per_item, 1).to(device)
 		answer = answers[i]
 		policy_model.clear_cache()
@@ -589,8 +589,7 @@ def tree_expansion_evaluation(
 	samples = test_dataset[:num_eval_items]
 	questions = samples['question']
 	answers = samples['answer']
-	print (questions)
-	input_ids = tokenizer.encode(questions, 
+	input_ids = tokenizer.batch_encode_plus(questions, 
 		return_tensors='pt', 
 		max_length=context_limit-tokens_to_generate,
 		padding='max_length', 
@@ -599,7 +598,7 @@ def tree_expansion_evaluation(
 	assert samples_per_item % expansion_factor == 0, 'Expansion factor should divide samples_per_item'
 	samples_to_keep = samples_per_item // expansion_factor
 	
-	for i in range(num_eval_items):
+	for i in tqdm(range(num_eval_items)):
 		input_ids = input_ids[i].repeat(samples_per_item, 1).to(device)
 		answer = answers[i]
 		policy_model.clear_cache()
