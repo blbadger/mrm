@@ -507,7 +507,7 @@ def train_loop(policy_model,
 
 
 @torch.no_grad()
-def tree_selection_evaluation(policy_model, reward_model, test_dataset, tokenizer, device, num_eval_items=2, samples_per_item=512, batch_size=16, k=2):
+def tree_selection_evaluation(policy_model, reward_model, test_dataset, tokenizer, device, num_eval_items=1, samples_per_item=512, batch_size=16, k=1):
 	"""
 	Computes the top-k accuracy using reward model branch selection
 	"""
@@ -589,6 +589,7 @@ def tree_expansion_evaluation(
 	samples = test_dataset[:num_eval_items]
 	questions = samples['question']
 	answers = samples['answer']
+	print (questions)
 	input_ids = tokenizer.encode(questions, 
 		return_tensors='pt', 
 		max_length=context_limit-tokens_to_generate,
@@ -696,16 +697,18 @@ if __name__ == "__main__":
 	reward_model = DualMixer(
 		n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
 		mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True, is_reward_model=True).float()
+	checkpoint_dir = f"{checkpoint_root}/gsm8k_tree_reward_b512"
 
 	model_path=f'{checkpoint_root}/gsm8k_SFT_srm_c1024/chkpt-300/model.safetensors'
 	load_model(policy_model, model_path)
+	reward_model_path = checkpoint_dir + '/checkpoint-1400/model.safetensors'
+	load_model(reward_model, reward_model_path)
 	policy_model = torch.compile(policy_model)
 	reward_model = torch.compile(reward_model)
 
-	checkpoint_dir = f"{checkpoint_root}/gsm8k_tree_reward_b512"
-	train_loop(policy_model, reward_model, train_dataset,eval_dataset, tokenizer, checkpoint_dir=checkpoint_dir)
+	#train_loop(policy_model, reward_model, train_dataset,eval_dataset, tokenizer, checkpoint_dir=checkpoint_dir)
 	device = 'cuda:0'
 	policy_model = policy_model.to(device)
 	reward_model = reward_model.to(device)
-	evaluate_models(policy_model, reward_model, eval_dataset, tokenizer, device)
 
+	tree_selection_evaluation(policy_model, reward_model, eval_dataset, tokenizer, device)

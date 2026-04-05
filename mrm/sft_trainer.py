@@ -89,8 +89,9 @@ if __name__ == '__main__':
     eval_dataset = eval_dataset.map(prepare_nshot, num_proc=16).remove_columns(['prompt', 'completion'])
     
     print (len(train_dataset))
-    model_path=f'{checkpoint_root}/finemath_h4_mixed_decay_nonparallel_projs_k1_1024_n16_c1024_b64x4/checkpoint-112000/model.safetensors'
-    #model_path=f'{checkpoint_root}/finemath_srm_h4_mixed_decay_nonparallel_projs_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
+    #model_path=f'{checkpoint_root}/finemath_h4_mixed_decay_nonparallel_projs_k1_1024_n16_c1024_b64x4/checkpoint-112000/model.safetensors'
+    #model_path=f'{checkpoint_root}/finemath_h4_mixed_decay_nonparallel_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
+    model_path=f'{checkpoint_root}/metamath_SFT_srm_c1024/checkpoint-41500/model.safetensors'
     load_model(model, model_path)
     print ('pretrained model loaded')
     response_template = '||'

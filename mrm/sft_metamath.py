@@ -9,7 +9,8 @@ from dotenv import load_dotenv
 import os
 from transformers.generation import GenerationMixin, GenerationConfig
 from transformers.modeling_outputs import CausalLMOutput
-
+import warnings
+warnings.filterwarnings('ignore')
 
 class SFTModel(MLPMixer):
 
@@ -51,7 +52,7 @@ class SFTModel(MLPMixer):
             return CausalLMOutput(loss=0., logits=logits)
 
 
-def prepare_nshot(example, n_shot=3):
+def prepare_nshot(example, n_shot=2):
     n_shot_prompt = '\n'.join([f"Question: {train_dataset[i]['query']} \nAnswer: {train_dataset[i]['response']}" for i in range(n_shot)])
     example['prompt'] = f"{n_shot_prompt}\n Question: {example['query']} \nAnswer :"
     example['completion'] = example['response']
@@ -80,14 +81,15 @@ if __name__ == '__main__':
 
     model = SFTModel(
         n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
-        mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True).to(device)
+        mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True)
 
     print (model)
-    dataset = load_dataset("meta-math/MetaMathQA", "main")
-    train_dataset, eval_dataset = dataset['train'], dataset['test']
-    train_dataset = train_dataset.map(prepare_nshot, num_proc=16).remove_columns(['prompt', 'completion'])
-    eval_dataset = eval_dataset.map(prepare_nshot, num_proc=16).remove_columns(['prompt', 'completion'])
-    
+    dataset = load_dataset("meta-math/MetaMathQA")
+    train_dataset, eval_dataset = dataset['train'].skip(2000), dataset['train'].take(2000)
+    train_dataset = train_dataset.map(prepare_nshot, num_proc=16)
+    eval_dataset = eval_dataset.map(prepare_nshot, num_proc=16)
+    train_dataset = train_dataset.remove_columns(['prompt', 'completion', 'original_question', 'query', 'response']) 
+    eval_dataset = eval_dataset.remove_columns(['prompt', 'completion', 'original_question', 'query', 'response'])
     print (len(train_dataset))
     #model_path=f'{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
     model_path=f'{checkpoint_root}/finemath_h4_mixed_decay_nonparallel_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
@@ -106,7 +108,7 @@ if __name__ == '__main__':
         logging_steps = 25,
         per_device_train_batch_size=16,
         max_seq_length = tokenized_length,
-        num_train_epochs = 13,
+        num_train_epochs = 20,
         save_steps = 100,
         eval_steps = 50,
         eval_strategy = 'steps',
