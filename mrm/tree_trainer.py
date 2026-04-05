@@ -571,7 +571,7 @@ def tree_expansion_evaluation(
 	samples_per_item=512, 
 	k=2, 
 	expansion_factor=2, 
-	tokens_unil_expansion=10
+	tokens_until_expansion=10
 	):
 	"""
 	Computes the top-k accuracy using reward model branch expansion and selection
@@ -710,4 +710,4 @@ if __name__ == "__main__":
 	policy_model = policy_model.to(device)
 	reward_model = reward_model.to(device)
 
-	tree_selection_evaluation(policy_model, reward_model, eval_dataset, tokenizer, device)
+	tree_expansion_evaluation(policy_model, reward_model, eval_dataset, tokenizer, device)
