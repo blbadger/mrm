@@ -505,9 +505,8 @@ def train_loop(policy_model,
 	return reward_model
 
 
-
 @torch.no_grad()
-def tree_selection_evaluation(policy_model, reward_model, test_dataset, tokenizer, device, num_eval_items=10, samples_per_item=512, batch_size=16, k=10):
+def tree_selection_evaluation(policy_model, reward_model, test_dataset, tokenizer, device, num_eval_items=20, samples_per_item=512, batch_size=16, k=1):
 	"""
 	Computes the top-k accuracy using reward model branch selection
 	"""
@@ -536,7 +535,9 @@ def tree_selection_evaluation(policy_model, reward_model, test_dataset, tokenize
 		generated_ids = policy_model.generate(
 			expanded_input_ids,
 			max_new_tokens=tokens_to_generate,
-			do_sample=False,
+			do_sample=True,
+			temperature=0.7,
+			top_p=0.9,
 			pad_token_id=tokenizer.pad_token_id
 		)
 		# batch computation for final rewards
@@ -553,6 +554,7 @@ def tree_selection_evaluation(policy_model, reward_model, test_dataset, tokenize
 		completions = tokenizer.batch_decode(selected_samples[:, -tokens_to_generate:], skip_special_tokens=True)
 		values = test_correctness(completions, answer)
 		has_correct = sum(values) > 0
+		tqdm.write(has_correct)
 		if has_correct:
 			total_correct += 1
 		total_samples += 1
@@ -608,16 +610,18 @@ def tree_expansion_evaluation(
 			new_tokens = min(context_limit - current_length, tokens_until_expansion)
 			print (current_length)
 			# generate tree
-			input_ids = policy_model.generate(
+			output_ids = policy_model.generate(
 				input_ids,
 				max_new_tokens=new_tokens,
-				do_sample=False,
+				do_sample=True,
+				temperature=0.7,
+				top_p=0.9,
 				pad_token_id=tokenizer.pad_token_id
 			)
 			print ('generation complete')
 			# generate rewards via recurrent forwards
 			for j in range(new_tokens):
-				output = reward_model(input_ids[:, :current_length+j])
+				output = reward_model(output_ids[:, :current_length+j])
 			print ('forwards complete')
 			last_rewards = output.reward[:, -1]
 			top_indices = torch.topk(last_rewards, samples_to_keep).indices
@@ -626,6 +630,7 @@ def tree_expansion_evaluation(
 			# expand caches
 			reward_model.select_and_expand_cache(top_indices, expansion_factor)
 			policy_model.select_and_expand_cache(top_indices, expansion_factor)
+			input_ids = output_ids
 			current_length = input_ids.shape[1]
 
 		# leaf selection for top k nodes
@@ -702,14 +707,14 @@ if __name__ == "__main__":
 
 	model_path=f'{checkpoint_root}/gsm8k_SFT_srm_c1024/chkpt-300/model.safetensors'
 	load_model(policy_model, model_path)
-	reward_model_path = f"{checkpoint_root}/gsm8k_tree_reward_b512" + '/checkpoint-1400/model.safetensors'
+	reward_model_path = f"{checkpoint_root}/gsm8k_tree_reward_b512_continued" + '/checkpoint-2600/model.safetensors'
 	load_model(reward_model, reward_model_path)
 	policy_model = torch.compile(policy_model)
 	reward_model = torch.compile(reward_model)
 
-	train_loop(policy_model, reward_model, train_dataset,eval_dataset, tokenizer, checkpoint_dir=checkpoint_dir)
+	#train_loop(policy_model, reward_model, train_dataset,eval_dataset, tokenizer, checkpoint_dir=checkpoint_dir)
 	device = 'cuda:0'
 	policy_model = policy_model.to(device)
 	reward_model = reward_model.to(device)
 
-	tree_expansion_evaluation(policy_model, reward_model, eval_dataset, tokenizer, device)
+	tree_selection_evaluation(policy_model, reward_model, eval_dataset, tokenizer, device)
