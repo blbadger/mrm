@@ -593,7 +593,7 @@ def tree_expansion_evaluation(
 		return_tensors='pt', 
 		max_length=context_limit-tokens_to_generate,
 		padding='max_length', 
-		padding_side='left').to(device)
+		padding_side='left').input_ids.to(device)
 
 	assert samples_per_item % expansion_factor == 0, 'Expansion factor should divide samples_per_item'
 	samples_to_keep = samples_per_item // expansion_factor
@@ -606,6 +606,7 @@ def tree_expansion_evaluation(
 		current_length = input_ids.shape[1]
 		while current_length < context_limit:
 			new_tokens = min(context_limit - current_length, tokens_until_expansion)
+			print (current_length)
 			# generate tree
 			input_ids = policy_model.generate(
 				input_ids,
@@ -613,10 +614,11 @@ def tree_expansion_evaluation(
 				do_sample=False,
 				pad_token_id=tokenizer.pad_token_id
 			)
+			print ('generation complete')
 			# generate rewards via recurrent forwards
-			for i in range(new_tokens):
-				output = reward_model.forward(input_ids[:, :current_length+i])
-
+			for j in range(new_tokens):
+				output = reward_model(input_ids[:, :current_length+j])
+			print ('forwards complete')
 			last_rewards = output.reward[:, -1]
 			top_indices = torch.topk(last_rewards, samples_to_keep).indices
 			selected_samples = input_ids[top_indices, :]
@@ -696,16 +698,16 @@ if __name__ == "__main__":
 	reward_model = DualMixer(
 		n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
 		mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True, is_reward_model=True).float()
-	checkpoint_dir = f"{checkpoint_root}/gsm8k_tree_reward_b512"
+	checkpoint_dir = f"{checkpoint_root}/gsm8k_tree_reward_b512_continued"
 
 	model_path=f'{checkpoint_root}/gsm8k_SFT_srm_c1024/chkpt-300/model.safetensors'
 	load_model(policy_model, model_path)
-	reward_model_path = checkpoint_dir + '/checkpoint-1400/model.safetensors'
+	reward_model_path = f"{checkpoint_root}/gsm8k_tree_reward_b512" + '/checkpoint-1400/model.safetensors'
 	load_model(reward_model, reward_model_path)
 	policy_model = torch.compile(policy_model)
 	reward_model = torch.compile(reward_model)
 
-	#train_loop(policy_model, reward_model, train_dataset,eval_dataset, tokenizer, checkpoint_dir=checkpoint_dir)
+	train_loop(policy_model, reward_model, train_dataset,eval_dataset, tokenizer, checkpoint_dir=checkpoint_dir)
 	device = 'cuda:0'
 	policy_model = policy_model.to(device)
 	reward_model = reward_model.to(device)
