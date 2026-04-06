@@ -126,6 +126,7 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 
 	def forward(self, input_ids, labels=None, **kwargs):
 		is_recurrent = input_ids.shape[1] < self.seq_len
+		#print (is_recurrent, input_ids.device, self.input_layer.weight.device, input_ids.shape, input_ids.dtype)
 		# mask pad tokens in labels for loss computation
 		if labels is not None:
 			labels = torch.where(labels==tokenizer.pad_token_id, -100., labels).to(self.input_layer.weight.dtype)
@@ -506,7 +507,7 @@ def train_loop(policy_model,
 
 
 @torch.no_grad()
-def tree_selection_evaluation(policy_model, reward_model, test_dataset, tokenizer, device, num_eval_items=20, samples_per_item=512, batch_size=16, k=1):
+def tree_selection_evaluation(policy_model, reward_model, test_dataset, tokenizer, device, num_eval_items=20, samples_per_item=512, batch_size=16, k=50):
 	"""
 	Computes the top-k accuracy using reward model branch selection
 	"""
@@ -554,7 +555,7 @@ def tree_selection_evaluation(policy_model, reward_model, test_dataset, tokenize
 		completions = tokenizer.batch_decode(selected_samples[:, -tokens_to_generate:], skip_special_tokens=True)
 		values = test_correctness(completions, answer)
 		has_correct = sum(values) > 0
-		tqdm.write(has_correct)
+		tqdm.write(f"{has_correct} correct")
 		if has_correct:
 			total_correct += 1
 		total_samples += 1
@@ -563,17 +564,18 @@ def tree_selection_evaluation(policy_model, reward_model, test_dataset, tokenize
 	print(f"Top{k} accuracy: {accuracy:.4f} ({total_correct}/{total_samples})")
 	return accuracy
 
+@torch.no_grad()
 def tree_expansion_evaluation(
 	policy_model, 
 	reward_model, 
 	test_dataset, 
 	tokenizer, 
 	device, 
-	num_eval_items=2, 
+	num_eval_items=20, 
 	samples_per_item=512, 
-	k=2, 
+	k=50, 
 	expansion_factor=2, 
-	tokens_until_expansion=10
+	tokens_until_expansion=20
 	):
 	"""
 	Computes the top-k accuracy using reward model branch expansion and selection
@@ -591,7 +593,7 @@ def tree_expansion_evaluation(
 	samples = test_dataset[:num_eval_items]
 	questions = samples['question']
 	answers = samples['answer']
-	input_ids = tokenizer.batch_encode_plus(questions, 
+	all_inputs = tokenizer.batch_encode_plus(questions, 
 		return_tensors='pt', 
 		max_length=context_limit-tokens_to_generate,
 		padding='max_length', 
@@ -601,7 +603,7 @@ def tree_expansion_evaluation(
 	samples_to_keep = samples_per_item // expansion_factor
 	
 	for i in tqdm(range(num_eval_items)):
-		input_ids = input_ids[i].repeat(samples_per_item, 1).to(device)
+		input_ids = all_inputs[i].repeat(samples_per_item, 1).to(device)
 		answer = answers[i]
 		policy_model.clear_cache()
 		reward_model.clear_cache()
@@ -618,12 +620,10 @@ def tree_expansion_evaluation(
 				top_p=0.9,
 				pad_token_id=tokenizer.pad_token_id
 			)
-			print ('generation complete')
-			# generate rewards via recurrent forwards
+			# generate rewards via recurrent forwards	
 			for j in range(new_tokens):
 				output = reward_model(output_ids[:, :current_length+j])
-			print ('forwards complete')
-			last_rewards = output.reward[:, -1]
+			last_rewards = output.logits
 			top_indices = torch.topk(last_rewards, samples_to_keep).indices
 			selected_samples = input_ids[top_indices, :]
 			input_ids = selected_samples.repeat(expansion_factor, 1)
@@ -642,7 +642,8 @@ def tree_expansion_evaluation(
 		if has_correct:
 			total_correct += 1
 		total_samples += 1
-	
+		print (i)
+			
 	accuracy = total_correct / total_samples if total_samples > 0 else 0
 	print(f"Top{k} accuracy: {accuracy:.4f} ({total_correct}/{total_samples})")
 	return accuracy
@@ -710,11 +711,11 @@ if __name__ == "__main__":
 	reward_model_path = f"{checkpoint_root}/gsm8k_tree_reward_b512_continued" + '/checkpoint-2600/model.safetensors'
 	load_model(reward_model, reward_model_path)
 	policy_model = torch.compile(policy_model)
-	reward_model = torch.compile(reward_model)
+	#reward_model = torch.compile(reward_model)
 
 	#train_loop(policy_model, reward_model, train_dataset,eval_dataset, tokenizer, checkpoint_dir=checkpoint_dir)
 	device = 'cuda:0'
 	policy_model = policy_model.to(device)
 	reward_model = reward_model.to(device)
 
-	tree_selection_evaluation(policy_model, reward_model, eval_dataset, tokenizer, device)
+	tree_expansion_evaluation(policy_model, reward_model, eval_dataset, tokenizer, device)
