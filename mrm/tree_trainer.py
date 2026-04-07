@@ -373,7 +373,7 @@ def train_tree_expansion(policy_model,
 			context_limit=1024,
 			train_steps=200000,
 			tokens_until_expansion=20,
-			batch_size=16,
+			batch_size=8,
 			learning_rate=1e-4,
 			value_constant=10.,
 			log_steps=1,
@@ -409,6 +409,7 @@ def train_tree_expansion(policy_model,
 		accelerator.print(f"Process {process_index}: Training on indices {start_idx} to {end_idx}")
 	else:
 		process_indices = list(range(len(train_dataset)))
+	
 	samples_to_keep = generate_batch // expansion_factor
 	total_loss = 0.0	
 	for step in tqdm(range(train_steps)):
@@ -455,7 +456,6 @@ def train_tree_expansion(policy_model,
 				)
 				# generate rewards via recurrent forwards	
 				for j in range(new_tokens):
-					print (j)
 					output = reward_model(output_ids[:, :current_length+j])
 				last_rewards = output.logits
 				top_indices = torch.topk(last_rewards, samples_to_keep).indices
@@ -866,15 +866,14 @@ if __name__ == "__main__":
 	n_vocab = tokenizer.vocab_size
 	print("Vocab size: ", n_vocab)
 
-	dataset = load_dataset("openai/gsm8k", "main")
+	dataset = load_from_disk(f"{data_root}/gsm8k", "main")
 	train_dataset, eval_dataset = dataset['train'], dataset['test']
 	train_dataset = train_dataset.map(prepare_nshot, num_proc=16)
-	print (train_dataset[0])
 	eval_dataset = eval_dataset.map(prepare_nshot, num_proc=16)
 
 	tokenized_length = 1024
 	dim = 1024
-	layers = 1
+	layers = 16
 	n_heads = 4
 	kernel = 1
 
@@ -887,13 +886,15 @@ if __name__ == "__main__":
 		mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True, is_reward_model=True).float()
 	checkpoint_dir = f"{checkpoint_root}/gsm8k_tree_expansion_b512"
 
-	model_path=f'{checkpoint_root}/gsm8k_SFT_srm_c1024/chkpt-300/model.safetensors'
-	model_path = f'{checkpoint_root}/gsm8k_SFT_srm_c1024/checkpoint-300/model.safetensors'
+	#model_path=f'{checkpoint_root}/gsm8k_SFT_srm_c1024/meta-chkpt-300/model.safetensors'
+	model_path = f'{checkpoint_root}/gsm8k_SFT_srm_c1024/chkpt-300/model.safetensors'
 	load_model(policy_model, model_path)
 	reward_model_path = f"{checkpoint_root}/gsm8k_tree_reward_b512_continued" + '/checkpoint-2600/model.safetensors'
 	load_model(reward_model, reward_model_path)
+	print ('models loaded')
+
 	policy_model = torch.compile(policy_model)
-	reward_model = torch.compile(reward_model)
+#	reward_model = torch.compile(reward_model)
 
 	train_tree_expansion(policy_model, reward_model, train_dataset,eval_dataset, tokenizer, checkpoint_dir=checkpoint_dir)
 	device = 'cuda:0'
