@@ -77,7 +77,7 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 			self.reward_head = nn.Linear(self.hidden_dim, 1)
 	
 	def add_model_tags(self, tag):
-		print (tag)
+		pass
 
 	def gradient_checkpointing_enable(self, *args, **kwargs):
 		pass
@@ -91,6 +91,7 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 	def _is_stateful(self):
 		return False
 
+	@torch.no_grad()
 	def get_cache(self):
 		cache_store = {}
 		for block in self.mixer_blocks:
@@ -98,12 +99,14 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 				cache_store[f'{block},{h}'] = block.token_mixing_layer.mixer_heads[h].cache
 		return cache_store
 
+	@torch.no_grad()
 	def load_cache(self, cache_store):
 		for block in self.mixer_blocks:
 			for h in range(len(block.token_mixing_layer.mixer_heads)):
 				block.token_mixing_layer.mixer_heads[h].cache = cache_store[f'{block},{h}']
 		return
 
+	@torch.no_grad()
 	def build_cache(self, input_ids):
 		for i in range(len(input_ids[0])-1):
 			x = self.input_layer(input_ids[:, i])
@@ -112,12 +115,14 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 		self.cache_built = True
 		return
 
+	@torch.no_grad()
 	def clear_cache(self):
 		for block in self.mixer_blocks:
 			for h in range(len(block.token_mixing_layer.mixer_heads)):
-				block.token_mixing_layer.mixer_heads[h].cache = torch.zeros(self.hidden_dim//self.n_heads).to('cuda') # only for mixed heads
+				block.token_mixing_layer.mixer_heads[h].cache = torch.zeros(self.hidden_dim//self.n_heads).to('cuda') # removes batch dim
 		self.cache_built = False
 
+	@torch.no_grad()
 	def select_and_expand_cache(self, top_indices, expansion_factor):
 		for block in self.mixer_blocks:
 			for h in range(len(block.token_mixing_layer.mixer_heads)):
@@ -126,7 +131,6 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 
 	def forward(self, input_ids, labels=None, **kwargs):
 		is_recurrent = input_ids.shape[1] < self.seq_len
-		#print (is_recurrent, input_ids.device, self.input_layer.weight.device, input_ids.shape, input_ids.dtype)
 		# mask pad tokens in labels for loss computation
 		if labels is not None:
 			labels = torch.where(labels==tokenizer.pad_token_id, -100., labels).to(self.input_layer.weight.dtype)
@@ -429,6 +433,7 @@ def train_tree_expansion(policy_model,
 			policy_model.module.clear_cache()
 		else:
 			policy_model.clear_cache()
+			
 		if hasattr(reward_model, 'module'):
 			reward_model.module.clear_cache()
 		else:
@@ -437,9 +442,8 @@ def train_tree_expansion(policy_model,
 		with torch.no_grad():
 			input_ids = input_ids.repeat(generate_batch, 1).to(device)
 			current_length = input_ids.shape[1]
-			safe_limit = context_limit - 1
-			while current_length < safe_limit:
-				new_tokens = min(safe_limit - current_length, tokens_until_expansion)
+			while current_length < context_limit:
+				new_tokens = min(context_limit - current_length, tokens_until_expansion)
 				# generate tree
 				output_ids = policy_model.generate(
 					input_ids,
@@ -451,18 +455,27 @@ def train_tree_expansion(policy_model,
 				)
 				# generate rewards via recurrent forwards	
 				for j in range(new_tokens):
+					print (j)
 					output = reward_model(output_ids[:, :current_length+j])
 				last_rewards = output.logits
 				top_indices = torch.topk(last_rewards, samples_to_keep).indices
 				selected_samples = input_ids[top_indices, :]
 				input_ids = selected_samples.repeat(expansion_factor, 1)
 				# expand caches
-				reward_model.module.select_and_expand_cache(top_indices, expansion_factor)
+				if hasattr(reward_model, 'module'):
+					reward_model.module.select_and_expand_cache(top_indices, expansion_factor)
+				else:
+					reward_model.select_and_expand_cache(top_indices, expansion_factor)
 				policy_model.select_and_expand_cache(top_indices, expansion_factor)
 				input_ids = output_ids
 				current_length = input_ids.shape[1]
 
-		reward_model.module.clear_cache()
+		# cache clear
+		with torch.no_grad():
+			if hasattr(reward_model, 'module'):
+				reward_model.module.clear_cache()
+			else:
+				reward_model.clear_cache()
 		generated_ids = output_ids
 		accelerator.wait_for_everyone()	
 		prompt_length = input_ids.shape[1]
@@ -506,7 +519,7 @@ def train_tree_expansion(policy_model,
 			accelerator.wait_for_everyone()	
 			
 		# Logging
-		if step % log_steps == 0:	
+		if step % log_steps == 0 and step > 0:	
 			accelerator.print(f"Step {step}: Loss={total_loss/(log_steps * accumulation_steps):.4f}, Correct Leaves={correct_leaves:.4f}, Num Leaves={num_leaves}")
 			total_loss = 0.0
 
@@ -861,7 +874,7 @@ if __name__ == "__main__":
 
 	tokenized_length = 1024
 	dim = 1024
-	layers = 16
+	layers = 1
 	n_heads = 4
 	kernel = 1
 
@@ -874,18 +887,18 @@ if __name__ == "__main__":
 		mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True, is_reward_model=True).float()
 	checkpoint_dir = f"{checkpoint_root}/gsm8k_tree_expansion_b512"
 
-	#model_path=f'{checkpoint_root}/gsm8k_SFT_srm_c1024/chkpt-300/model.safetensors'
+	model_path=f'{checkpoint_root}/gsm8k_SFT_srm_c1024/chkpt-300/model.safetensors'
 	model_path = f'{checkpoint_root}/gsm8k_SFT_srm_c1024/checkpoint-300/model.safetensors'
 	load_model(policy_model, model_path)
 	reward_model_path = f"{checkpoint_root}/gsm8k_tree_reward_b512_continued" + '/checkpoint-2600/model.safetensors'
 	load_model(reward_model, reward_model_path)
 	policy_model = torch.compile(policy_model)
-	#reward_model = torch.compile(reward_model)
+	reward_model = torch.compile(reward_model)
 
-	#train_tree_expansion(policy_model, reward_model, train_dataset,eval_dataset, tokenizer, checkpoint_dir=checkpoint_dir)
+	train_tree_expansion(policy_model, reward_model, train_dataset,eval_dataset, tokenizer, checkpoint_dir=checkpoint_dir)
 	device = 'cuda:0'
 	policy_model = policy_model.to(device)
 	reward_model = reward_model.to(device)
 
-	tree_selection_evaluation(policy_model, reward_model, eval_dataset, tokenizer, device, random_selection=True)
+	# tree_selection_evaluation(policy_model, reward_model, eval_dataset, tokenizer, device, random_selection=True)
 	#tree_expansion_evaluation(policy_model, reward_model, eval_dataset, tokenizer, device)
