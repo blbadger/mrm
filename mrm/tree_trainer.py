@@ -360,6 +360,172 @@ def prepare_nshot(example, n_shot=3):
     example['cleaned_answer'] = answer_extract(example['answer'])
     return example
 
+def train_tree_expansion(policy_model,
+			reward_model,
+			train_dataset,
+			test_dataset,
+			tokenizer,
+			accelerator=None,
+			generate_batch=512,
+			train_steps=200000,
+			tokens_until_expansion=20,
+			batch_size=16,
+			learning_rate=1e-4,
+			value_constant=10.,
+			log_steps=1,
+			eval_steps=100,
+			save_steps=200,
+			checkpoint_dir=''
+			):
+	if accelerator is None:
+		ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
+		accelerator = Accelerator(kwargs_handlers=[ddp_kwargs], mixed_precision='fp16')
+	
+	if accelerator.is_main_process:
+		os.makedirs(checkpoint_dir, exist_ok=True)
+	device = accelerator.device
+	reward_model = reward_model.to(device)
+	policy_model = policy_model.to(device)
+	optimizer = torch.optim.AdamW(reward_model.parameters(), lr=learning_rate)
+	
+	reward_model, optimizer = accelerator.prepare(reward_model, optimizer)
+	
+	policy_model.eval()  # Freeze policy model
+	reward_model.train()	
+	
+	# Split dataset across processes for DDP
+	if accelerator.num_processes > 1:
+		process_index = accelerator.process_index
+		num_processes = accelerator.num_processes
+		dataset_size = len(train_dataset)
+		indices_per_process = dataset_size // num_processes
+		start_idx = process_index * indices_per_process
+		end_idx = start_idx + indices_per_process if process_index < num_processes - 1 else dataset_size
+		process_indices = list(range(start_idx, end_idx))
+		accelerator.print(f"Process {process_index}: Training on indices {start_idx} to {end_idx}")
+	else:
+		process_indices = list(range(len(train_dataset)))
+
+	total_loss = 0.0	
+	for step in tqdm(range(train_steps)):
+		# Get a dataset element (cycle through process-specific indices)
+		local_idx = step % len(process_indices)
+		data_idx = process_indices[local_idx]
+		data_element = train_dataset[data_idx]
+		
+		question = data_element['question']
+		answer = data_element['answer']
+		tokens_to_generate = 256
+		input_ids = tokenizer.encode(question, 
+			return_tensors='pt', 
+			max_length=1024-tokens_to_generate, 
+			padding='max_length', 
+			padding_side='left').to(device)
+		
+		if accelerator.is_main_process:
+			accelerator.print(f"Step {step}/{train_steps}: Generating {generate_batch} samples per question...")
+
+		if hasattr(policy_model, 'module'):
+			policy_model.module.clear_cache()
+		else:
+			policy_model.clear_cache()
+		
+		with torch.no_grad():
+			input_ids = all_inputs[i].repeat(samples_per_item, 1).to(device)
+			answer = answers[i]
+			reward_model.clear_cache()
+			current_length = input_ids.shape[1]
+			while current_length < context_limit:
+				new_tokens = min(context_limit - current_length, tokens_until_expansion)
+				# generate tree
+				output_ids = policy_model.generate(
+					input_ids,
+					max_new_tokens=new_tokens,
+					do_sample=True,
+					temperature=0.7,
+					top_p=0.9,
+					pad_token_id=tokenizer.pad_token_id
+				)
+				# generate rewards via recurrent forwards	
+				for j in range(new_tokens):
+					output = reward_model(output_ids[:, :current_length+j])
+				last_rewards = output.logits
+				top_indices = torch.topk(last_rewards, samples_to_keep).indices
+				selected_samples = input_ids[top_indices, :]
+				input_ids = selected_samples.repeat(expansion_factor, 1)
+				# expand caches
+				reward_model.select_and_expand_cache(top_indices, expansion_factor)
+				policy_model.select_and_expand_cache(top_indices, expansion_factor)
+				input_ids = output_ids
+				current_length = input_ids.shape[1]
+
+		reward_model.clear_cache()
+		generated_ids = output_ids
+		accelerator.wait_for_everyone()	
+		prompt_length = input_ids.shape[1]
+		generated_tokens = generated_ids[:, prompt_length:]
+		
+		# Convert generations to tree structure, back up values, and process
+		print ('building and processing tree')
+		tree = convert_generations_to_tree(generated_ids)
+		completions = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
+		values = test_correctness(completions, answer, value_constant)
+		tree = tree_backup(tree, values)
+		token_values = get_token_values(tree)
+		token_sequences = get_token_sequences(tree)
+		num_leaves = len([node['value'] for node in tree.values() if node['is_leaf']])
+		correct_leaves = sum([node['value'] for node in tree.values() if node['is_leaf']]) / value_constant
+		print (f'Correct paths: {correct_leaves}')	
+		value_batch = get_value_batch(tree, token_values)
+		token_batch = get_token_batch(tree, token_sequences)
+		
+		# Online training batches
+		num_leaves = len(token_sequences)
+		pad_number = generate_batch - num_leaves
+		
+		token_sequences = torch.cat((token_batch, token_batch[:pad_number]), dim=0)
+		value_batch = torch.cat((value_batch, value_batch[:pad_number]), dim=0)
+		num_samples = token_sequences.shape[0]
+		accumulation_steps = num_samples // batch_size
+		accelerator.wait_for_everyone()
+		for batch_idx in range(0, len(generated_ids), batch_size):
+			optimizer.zero_grad()
+			batch_end = min(batch_idx + batch_size, num_samples)
+			batch_ids = generated_ids[batch_idx:batch_end]
+			batch_values = value_batch[batch_idx:batch_end]
+			batch_input_ids = torch.tensor(batch_ids, dtype=torch.long).to(device)
+			batch_target_values = torch.tensor(batch_values, dtype=torch.float).to(device)
+			output = reward_model(batch_input_ids, labels=batch_target_values)
+			loss = output.loss
+			accelerator.backward(loss)
+			total_loss += loss.item()
+			optimizer.step()
+			accelerator.wait_for_everyone()	
+			
+		# Logging
+		if step % log_steps == 0:	
+			accelerator.print(f"Step {step}: Loss={total_loss/(log_steps * accumulation_steps):.4f}, Correct Leaves={correct_leaves:.4f}, Num Leaves={num_leaves}")
+			total_loss = 0.0
+
+		# Save checkpoint (only on main process)
+		if step % save_steps == 0 and accelerator.is_main_process:
+			checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint-{step}")
+			os.makedirs(checkpoint_path, exist_ok=True)
+			if hasattr(reward_model, 'module'):
+				unwrapped_model = reward_model.module
+			else:
+				unwrapped_model = reward_model
+
+			if hasattr(unwrapped_model, '_orig_mod'):
+				unwrapped_model = unwrapped_model._orig_mod
+			
+			save_model(unwrapped_model, os.path.join(checkpoint_path, "model.safetensors"))		
+			accelerator.print(f"Saved checkpoint to {checkpoint_path}")
+		accelerator.wait_for_everyone()
+	return reward_model
+
+
+
 def train_loop(policy_model,
 			reward_model,
 			train_dataset,
@@ -483,10 +649,6 @@ def train_loop(policy_model,
 		if step % log_steps == 0:	
 			accelerator.print(f"Step {step}: Loss={total_loss/(log_steps * accumulation_steps):.4f}, Correct Leaves={correct_leaves:.4f}, Num Leaves={num_leaves}")
 			total_loss = 0.0
-		# Periodic evaluation (only on main process)
-		#if step % eval_steps == 0 and test_dataset is not None and accelerator.is_main_process:
-		#	accelerator.print(f"Step {step}: Running evaluation...")
-		#	evaluate_model(policy_model, reward_model, test_dataset, tokenizer, device)
 
 		# Save checkpoint (only on main process)
 		if step % save_steps == 0 and accelerator.is_main_process:
@@ -711,11 +873,11 @@ if __name__ == "__main__":
 	reward_model_path = f"{checkpoint_root}/gsm8k_tree_reward_b512_continued" + '/checkpoint-2600/model.safetensors'
 	load_model(reward_model, reward_model_path)
 	policy_model = torch.compile(policy_model)
-	#reward_model = torch.compile(reward_model)
+	reward_model = torch.compile(reward_model)
 
-	#train_loop(policy_model, reward_model, train_dataset,eval_dataset, tokenizer, checkpoint_dir=checkpoint_dir)
-	device = 'cuda:0'
-	policy_model = policy_model.to(device)
-	reward_model = reward_model.to(device)
+	train_tree_expansion(policy_model, reward_model, train_dataset,eval_dataset, tokenizer, checkpoint_dir=checkpoint_dir)
+	# device = 'cuda:0'
+	# policy_model = policy_model.to(device)
+	# reward_model = reward_model.to(device)
 
-	tree_expansion_evaluation(policy_model, reward_model, eval_dataset, tokenizer, device)
+	# tree_expansion_evaluation(policy_model, reward_model, eval_dataset, tokenizer, device)
