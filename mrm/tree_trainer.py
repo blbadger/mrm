@@ -507,7 +507,7 @@ def train_loop(policy_model,
 
 
 @torch.no_grad()
-def tree_selection_evaluation(policy_model, reward_model, test_dataset, tokenizer, device, num_eval_items=20, samples_per_item=512, batch_size=16, k=50):
+def tree_selection_evaluation(policy_model, reward_model, test_dataset, tokenizer, device, num_eval_items=100, samples_per_item=512, batch_size=16, k=50):
 	"""
 	Computes the top-k accuracy using reward model branch selection
 	"""
@@ -711,11 +711,11 @@ if __name__ == "__main__":
 	reward_model_path = f"{checkpoint_root}/gsm8k_tree_reward_b512_continued" + '/checkpoint-2600/model.safetensors'
 	load_model(reward_model, reward_model_path)
 	policy_model = torch.compile(policy_model)
-	#reward_model = torch.compile(reward_model)
+	reward_model = torch.compile(reward_model)
 
 	#train_loop(policy_model, reward_model, train_dataset,eval_dataset, tokenizer, checkpoint_dir=checkpoint_dir)
 	device = 'cuda:0'
 	policy_model = policy_model.to(device)
 	reward_model = reward_model.to(device)
 
-	tree_expansion_evaluation(policy_model, reward_model, eval_dataset, tokenizer, device)
+	tree_selection_evaluation(policy_model, reward_model, eval_dataset, tokenizer, device)
