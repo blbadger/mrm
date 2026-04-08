@@ -459,15 +459,14 @@ def train_tree_expansion(policy_model,
 					output = reward_model(output_ids[:, :current_length+j])
 				last_rewards = output.logits
 				top_indices = torch.topk(last_rewards, samples_to_keep).indices
-				selected_samples = input_ids[top_indices, :]
-				input_ids = selected_samples.repeat(expansion_factor, 1)
+				selected_samples = output_ids[top_indices, :].repeat(expansion_factor, 1)
 				# expand caches
 				if hasattr(reward_model, 'module'):
 					reward_model.module.select_and_expand_cache(top_indices, expansion_factor)
 				else:
 					reward_model.select_and_expand_cache(top_indices, expansion_factor)
 				policy_model.select_and_expand_cache(top_indices, expansion_factor)
-				input_ids = output_ids
+				input_ids = selected_samples
 				current_length = input_ids.shape[1]
 
 		# cache clear
