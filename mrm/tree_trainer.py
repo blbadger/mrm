@@ -552,7 +552,7 @@ def train_loop(policy_model,
 			batch_size=16,
 			learning_rate=1e-4,
 			value_constant=10.,
-			log_steps=1,
+			log_steps=10,
 			eval_steps=100,
 			save_steps=200,
 			checkpoint_dir=''
@@ -655,9 +655,10 @@ def train_loop(policy_model,
 			batch_target_values = torch.tensor(batch_values, dtype=torch.float).to(device)
 			output = reward_model(batch_input_ids, labels=batch_target_values)
 			loss = output.loss
-			accelerator.backward(loss)
-			total_loss += loss.item()
-			optimizer.step()
+			if torch.isfinite(loss):
+				accelerator.backward(loss)
+				total_loss += loss.item()
+				optimizer.step()
 			accelerator.wait_for_everyone()	
 			
 		# Logging
@@ -666,7 +667,7 @@ def train_loop(policy_model,
 			total_loss = 0.0
 
 		# Save checkpoint (only on main process)
-		if step % save_steps == 0 and accelerator.is_main_process:
+		if step % save_steps == 0 and accelerator.is_main_process and step > 0:
 			checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint-{step}")
 			os.makedirs(checkpoint_path, exist_ok=True)
 			if hasattr(reward_model, 'module'):
@@ -883,19 +884,19 @@ if __name__ == "__main__":
 	reward_model = DualMixer(
 		n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
 		mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True, is_reward_model=True).float()
-	checkpoint_dir = f"{checkpoint_root}/gsm8k_tree_expansion_b512"
+	checkpoint_dir = f"{checkpoint_root}/gsm8k_meta_tree_expansion_b512"
 
-	#model_path=f'{checkpoint_root}/gsm8k_SFT_srm_c1024/meta-chkpt-300/model.safetensors'
-	model_path = f'{checkpoint_root}/gsm8k_SFT_srm_c1024/chkpt-300/model.safetensors'
+	model_path=f'{checkpoint_root}/gsm8k_SFT_srm_c1024/meta-chkpt-300/model.safetensors'
+	#model_path = f'{checkpoint_root}/gsm8k_SFT_srm_c1024/chkpt-300/model.safetensors'
 	load_model(policy_model, model_path)
-	reward_model_path = f"{checkpoint_root}/gsm8k_tree_reward_b512_continued" + '/checkpoint-2600/model.safetensors'
-	load_model(reward_model, reward_model_path)
+	reward_model_path = f"{checkpoint_root}/gsm8k_SFT_srm_c1024/meta-chkpt-300/model.safetensors"
+	load_model(reward_model, reward_model_path, strict=False)
 	print ('models loaded')
 
 	policy_model = torch.compile(policy_model)
-#	reward_model = torch.compile(reward_model)
+	reward_model = torch.compile(reward_model)
 
-	train_tree_expansion(policy_model, reward_model, train_dataset,eval_dataset, tokenizer, checkpoint_dir=checkpoint_dir)
+	train_loop(policy_model, reward_model, train_dataset,eval_dataset, tokenizer, checkpoint_dir=checkpoint_dir)
 	device = 'cuda:0'
 	policy_model = policy_model.to(device)
 	reward_model = reward_model.to(device)
