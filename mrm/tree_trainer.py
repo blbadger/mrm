@@ -550,7 +550,7 @@ def train_loop(policy_model,
 			generate_batch=512,
 			train_steps=1000,
 			batch_size=16,
-			learning_rate=4e-5,
+			learning_rate=1e-4,
 			value_constant=10.,
 			log_steps=10,
 			eval_steps=100,
@@ -567,6 +567,7 @@ def train_loop(policy_model,
 	reward_model = reward_model.to(device)
 	policy_model = policy_model.to(device)
 	optimizer = torch.optim.AdamW(reward_model.parameters(), lr=learning_rate)
+
 	scheduler = get_linear_schedule_with_warmup(
 	    optimizer,
 	    num_warmup_steps=500,
@@ -592,6 +593,7 @@ def train_loop(policy_model,
 		process_indices = list(range(len(train_dataset)))
 
 	total_loss = torch.tensor([0.]).to(device)
+	total_grad_norm = torch.tensor([0.]).to(device)
 	for step in tqdm(range(train_steps)):
 		# Get a dataset element (cycle through process-specific indices)
 		local_idx = step % len(process_indices)
@@ -659,22 +661,28 @@ def train_loop(policy_model,
 			batch_input_ids = torch.tensor(batch_ids, dtype=torch.long).to(device)
 			batch_target_values = torch.tensor(batch_values, dtype=torch.float).to(device)
 			output = reward_model(batch_input_ids, labels=batch_target_values)
+
 			loss = output.loss
 			accelerator.backward(loss)
-			accelerator.clip_grad_norm_(reward_model.parameters(), max_norm=1.0)
+			grad_norm = accelerator.clip_grad_norm_(reward_model.parameters(), max_norm=1.0)
 			optimizer.step()
+
 			if torch.isfinite(loss):
 				total_loss += loss.item()
+				total_grad_norm += grad_norm.item()
 			accelerator.wait_for_everyone()	
 
 		# Logging
 		if step % log_steps == 0:	
 			total_loss = accelerator.gather(total_loss)
+			total_grad_norm = accelerator.gather(total_grad_norm)
 			n_gpus = len(total_loss)
 			total_loss = torch.sum(total_loss).item()
+			n_samples = log_steps * accumulation_steps * n_gpus
 
-			accelerator.print(f"Step {step}: Average Loss={total_loss/(log_steps * accumulation_steps * n_gpus):.4f}, Correct Leaves={correct_leaves:.4f}, Num Leaves={num_leaves}")
+			accelerator.print(f"Step {step}: Average Loss={total_loss/n_samples:.3f}, Grad Norm: {total_grad_norm/n_samples:.3f}")
 			total_loss = torch.tensor([0.]).to(device)
+			total_grad_norm = torch.tensor([0.]).to(device)
 
 		# Save checkpoint (only on main process)
 		if step % save_steps == 0 and accelerator.is_main_process and step > 0:
