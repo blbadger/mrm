@@ -675,7 +675,7 @@ def train_loop(policy_model,
 		# Logging
 		if step % log_steps == 0:	
 			total_loss = accelerator.gather(total_loss)
-			total_grad_norm = accelerator.gather(total_grad_norm)
+			total_grad_norm = torch.sum(accelerator.gather(total_grad_norm)).item()
 			n_gpus = len(total_loss)
 			total_loss = torch.sum(total_loss).item()
 			n_samples = log_steps * accumulation_steps * n_gpus
