@@ -669,7 +669,7 @@ def train_loop(policy_model,
 			n_gpus = len(total_loss)
 			total_loss = torch.sum(total_loss).item()
 			accelerator.print(f"Step {step}: Loss={total_loss/(log_steps * accumulation_steps * n_gpus):.4f}, Correct Leaves={correct_leaves:.4f}, Num Leaves={num_leaves}")
-			total_loss = torch.tensor([0.])
+			total_loss = torch.tensor([0.]).to(device)
 
 		# Save checkpoint (only on main process)
 		if step % save_steps == 0 and accelerator.is_main_process and step > 0:
