@@ -550,7 +550,7 @@ def train_loop(policy_model,
 			generate_batch=512,
 			train_steps=1000,
 			batch_size=16,
-			learning_rate=1e-4,
+			learning_rate=4e-5,
 			value_constant=10.,
 			log_steps=10,
 			eval_steps=100,
@@ -624,7 +624,6 @@ def train_loop(policy_model,
 		generated_tokens = generated_ids[:, prompt_length:]
 		
 		# Convert generations to tree structure, back up values, and process
-		print ('building and processing tree')
 		tree = convert_generations_to_tree(generated_ids)
 		completions = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
 		values = test_correctness(completions, answer, value_constant)
@@ -633,7 +632,7 @@ def train_loop(policy_model,
 		token_sequences = get_token_sequences(tree)
 		num_leaves = len([node['value'] for node in tree.values() if node['is_leaf']])
 		correct_leaves = sum([node['value'] for node in tree.values() if node['is_leaf']]) / value_constant
-		print (f'Correct paths: {correct_leaves}')	
+		tqdm.write((f'Correct paths: {int(correct_leaves)}'))
 		value_batch = get_value_batch(tree, token_values)
 		token_batch = get_token_batch(tree, token_sequences)
 		
@@ -656,18 +655,19 @@ def train_loop(policy_model,
 			batch_target_values = torch.tensor(batch_values, dtype=torch.float).to(device)
 			output = reward_model(batch_input_ids, labels=batch_target_values)
 			loss = output.loss
+			accelerator.clip_grad_norm_(reward_model.parameters(), max_norm=1.0)
 			accelerator.backward(loss)
 			optimizer.step()
 			if torch.isfinite(loss):
 				total_loss += loss.item()
 			accelerator.wait_for_everyone()	
-		print (f'Device {device} complete')
 
 		# Logging
 		if step % log_steps == 0:	
 			total_loss = accelerator.gather(total_loss)
 			n_gpus = len(total_loss)
 			total_loss = torch.sum(total_loss).item()
+
 			accelerator.print(f"Step {step}: Average Loss={total_loss/(log_steps * accumulation_steps * n_gpus):.4f}, Correct Leaves={correct_leaves:.4f}, Num Leaves={num_leaves}")
 			total_loss = torch.tensor([0.])
 
@@ -905,7 +905,6 @@ if __name__ == "__main__":
 	checkpoint_dir = f"{checkpoint_root}/gsm8k_meta_tree_expansion_b512"
 
 	model_path=f'{checkpoint_root}/gsm8k_SFT_srm_c1024/meta-chkpt-300/model.safetensors'
-	#model_path = f'{checkpoint_root}/gsm8k_SFT_srm_c1024/chkpt-300/model.safetensors'
 	load_model(policy_model, model_path)
 	reward_model_path = f"{checkpoint_root}/gsm8k_SFT_srm_c1024/meta-chkpt-300/model.safetensors"
 	load_model(reward_model, reward_model_path, strict=False)
@@ -915,9 +914,10 @@ if __name__ == "__main__":
 	reward_model = torch.compile(reward_model)
 
 	train_loop(policy_model, reward_model, train_dataset,eval_dataset, tokenizer, checkpoint_dir=checkpoint_dir)
-	device = 'cuda:0'
-	policy_model = policy_model.to(device)
-	reward_model = reward_model.to(device)
+
+	# device = 'cuda:0'
+	# policy_model = policy_model.to(device)
+	# reward_model = reward_model.to(device)
 
 	# tree_selection_evaluation(policy_model, reward_model, eval_dataset, tokenizer, device, random_selection=True)
 	#tree_expansion_evaluation(policy_model, reward_model, eval_dataset, tokenizer, device)
