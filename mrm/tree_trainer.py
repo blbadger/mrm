@@ -548,7 +548,7 @@ def train_loop(policy_model,
 			tokenizer,
 			accelerator=None,
 			generate_batch=512,
-			train_steps=200000,
+			train_steps=1000,
 			batch_size=16,
 			learning_rate=1e-4,
 			value_constant=10.,
@@ -668,7 +668,7 @@ def train_loop(policy_model,
 			total_loss = accelerator.gather(total_loss)
 			n_gpus = len(total_loss)
 			total_loss = torch.sum(total_loss).item()
-			accelerator.print(f"Step {step}: Loss={total_loss/(log_steps * accumulation_steps * n_gpus):.4f}, Correct Leaves={correct_leaves:.4f}, Num Leaves={num_leaves}")
+			accelerator.print(f"Step {step}: Average Loss={total_loss/(log_steps * accumulation_steps * n_gpus):.4f}, Correct Leaves={correct_leaves:.4f}, Num Leaves={num_leaves}")
 			total_loss = torch.tensor([0.])
 
 		# Save checkpoint (only on main process)
@@ -837,21 +837,29 @@ def tree_expansion_evaluation(
 	return accuracy
 
 
-def tree_test():
+def tree_value_test():
 	generations = torch.tensor([
-	[0, 4, 5, 3],
-	[0, 4, 4, 1],
-	[0, 3, 5, 3],
-	[0, 4, 5, 2]
+	[0, 4, 5, 3, 1],
+	[0, 4, 4, 1, 3],
+	[0, 3, 4, 3, 3],
+	[0, 4, 5, 3, 2],
+	[0, 4, 5, 2, 2],
 	])
-	values = [0, 1, 0, 0]
+	values = [1, 0, 0, 1, 0]
 	tree = convert_generations_to_tree(generations)
-	# print (get_token_sequences(tree))
 	tree = tree_backup(tree, values)
-	print (tree)
-	print ('\n\n\n')
-	print (get_token_values(tree))
-	return
+	token_values = get_token_values(tree)
+	token_sequences = get_token_sequences(tree)
+	num_leaves = len([node['value'] for node in tree.values() if node['is_leaf']])
+	correct_leaves = sum([node['value'] for node in tree.values() if node['is_leaf']]) 
+	print (f'Correct paths: {correct_leaves}')	
+	value_batch = get_value_batch(tree, token_values)
+	token_batch = get_token_batch(tree, token_sequences)
+	print (value_batch, token_batch)
+	recovered_last_values = [int(k) for k in value_batch[:, -1]]
+	assert recovered_last_values == values
+	assert torch.allclose(generations, token_batch)
+
 
 def throughput_test():
 	text ='''Four score and seven years ago, our forefathers, for the purpose of a more perfect union, sought'''
@@ -863,6 +871,9 @@ def throughput_test():
 	start = time.time()
 	print (f'Example: {tokenizer.decode(output_ids[0])}, elapsed time: {time.time() - start}, t/s: {(tokens_to_generate * batch_size)/(time.time() - start)}')
 	return
+
+tree_value_test()
+
 
 if __name__ == "__main__":
 	load_dotenv()
