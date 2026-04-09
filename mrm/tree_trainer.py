@@ -586,7 +586,7 @@ def train_loop(policy_model,
 	else:
 		process_indices = list(range(len(train_dataset)))
 
-	total_loss = 0.0	
+	total_loss = torch.tensor([0.0])
 	for step in tqdm(range(train_steps)):
 		# Get a dataset element (cycle through process-specific indices)
 		local_idx = step % len(process_indices)
@@ -641,6 +641,7 @@ def train_loop(policy_model,
 		num_leaves = len(token_sequences)
 		pad_number = generate_batch - num_leaves
 		
+		# pad in the batch dimension to avoid wait_for_everyone hang
 		token_sequences = torch.cat((token_batch, token_batch[:pad_number]), dim=0)
 		value_batch = torch.cat((value_batch, value_batch[:pad_number]), dim=0)
 		num_samples = token_sequences.shape[0]
@@ -663,7 +664,8 @@ def train_loop(policy_model,
 			
 		# Logging
 		if step % log_steps == 0:	
-			accelerator.print(f"Step {step}: Loss={total_loss/(log_steps * accumulation_steps):.4f}, Correct Leaves={correct_leaves:.4f}, Num Leaves={num_leaves}")
+			total_loss = accelerator.gather(total_loss)
+			accelerator.print(f"Step {step}: Loss={total_loss/(log_steps * accumulation_steps * 4):.4f}, Correct Leaves={correct_leaves:.4f}, Num Leaves={num_leaves}")
 			total_loss = 0.0
 
 		# Save checkpoint (only on main process)
@@ -680,6 +682,7 @@ def train_loop(policy_model,
 			
 			save_model(unwrapped_model, os.path.join(checkpoint_path, "model.safetensors"))		
 			accelerator.print(f"Saved checkpoint to {checkpoint_path}")
+
 		accelerator.wait_for_everyone()
 	return reward_model
 
