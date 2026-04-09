@@ -586,7 +586,7 @@ def train_loop(policy_model,
 	else:
 		process_indices = list(range(len(train_dataset)))
 
-	total_loss = torch.tensor([0.0])
+	total_loss = torch.tensor([0.]).to(device)
 	for step in tqdm(range(train_steps)):
 		# Get a dataset element (cycle through process-specific indices)
 		local_idx = step % len(process_indices)
@@ -661,7 +661,8 @@ def train_loop(policy_model,
 				total_loss += loss.item()
 				optimizer.step()
 			accelerator.wait_for_everyone()	
-			
+		print (f'Device {device} complete')
+
 		# Logging
 		if step % log_steps == 0:	
 			total_loss = accelerator.gather(total_loss)
@@ -684,6 +685,7 @@ def train_loop(policy_model,
 			accelerator.print(f"Saved checkpoint to {checkpoint_path}")
 
 		accelerator.wait_for_everyone()
+		print ('await complete')
 	return reward_model
 
 
