@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from einops import rearrange
 import transformers
-from transformers import AutoTokenizer, LlamaConfig
+from transformers import AutoTokenizer, LlamaConfig, get_linear_schedule_with_warmup
 from transformers.modeling_outputs import CausalLMOutput
 from transformers.generation import GenerationMixin, GenerationConfig
 import datasets
@@ -567,8 +567,13 @@ def train_loop(policy_model,
 	reward_model = reward_model.to(device)
 	policy_model = policy_model.to(device)
 	optimizer = torch.optim.AdamW(reward_model.parameters(), lr=learning_rate)
+	scheduler = get_linear_schedule_with_warmup(
+	    optimizer,
+	    num_warmup_steps=500,
+	    num_training_steps=50000
+	)
 	
-	reward_model, optimizer = accelerator.prepare(reward_model, optimizer)
+	reward_model, optimizer, scheduler = accelerator.prepare(reward_model, optimizer, scheduler)
 	
 	policy_model.eval()  # Freeze policy model
 	reward_model.train()	
@@ -655,8 +660,8 @@ def train_loop(policy_model,
 			batch_target_values = torch.tensor(batch_values, dtype=torch.float).to(device)
 			output = reward_model(batch_input_ids, labels=batch_target_values)
 			loss = output.loss
-			accelerator.clip_grad_norm_(reward_model.parameters(), max_norm=1.0)
 			accelerator.backward(loss)
+			accelerator.clip_grad_norm_(reward_model.parameters(), max_norm=1.0)
 			optimizer.step()
 			if torch.isfinite(loss):
 				total_loss += loss.item()
@@ -669,7 +674,7 @@ def train_loop(policy_model,
 			total_loss = torch.sum(total_loss).item()
 
 			accelerator.print(f"Step {step}: Average Loss={total_loss/(log_steps * accumulation_steps * n_gpus):.4f}, Correct Leaves={correct_leaves:.4f}, Num Leaves={num_leaves}")
-			total_loss = torch.tensor([0.])
+			total_loss = torch.tensor([0.]).to(device)
 
 		# Save checkpoint (only on main process)
 		if step % save_steps == 0 and accelerator.is_main_process and step > 0:
@@ -687,7 +692,6 @@ def train_loop(policy_model,
 			accelerator.print(f"Saved checkpoint to {checkpoint_path}")
 
 		accelerator.wait_for_everyone()
-		print ('await complete')
 	return reward_model
 
 
