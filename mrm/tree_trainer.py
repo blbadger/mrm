@@ -656,18 +656,20 @@ def train_loop(policy_model,
 			batch_target_values = torch.tensor(batch_values, dtype=torch.float).to(device)
 			output = reward_model(batch_input_ids, labels=batch_target_values)
 			loss = output.loss
+			accelerator.backward(loss)
+			optimizer.step()
 			if torch.isfinite(loss):
-				accelerator.backward(loss)
 				total_loss += loss.item()
-				optimizer.step()
 			accelerator.wait_for_everyone()	
 		print (f'Device {device} complete')
 
 		# Logging
 		if step % log_steps == 0:	
 			total_loss = accelerator.gather(total_loss)
-			accelerator.print(f"Step {step}: Loss={total_loss/(log_steps * accumulation_steps * 4):.4f}, Correct Leaves={correct_leaves:.4f}, Num Leaves={num_leaves}")
-			total_loss = 0.0
+			n_gpus = len(total_loss)
+			total_loss = torch.sum(total_loss).item()
+			accelerator.print(f"Step {step}: Loss={total_loss/(log_steps * accumulation_steps * n_gpus):.4f}, Correct Leaves={correct_leaves:.4f}, Num Leaves={num_leaves}")
+			total_loss = torch.tensor([0.])
 
 		# Save checkpoint (only on main process)
 		if step % save_steps == 0 and accelerator.is_main_process and step > 0:
