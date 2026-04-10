@@ -75,7 +75,10 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 		if is_reward_model:
 			self.loss_fn = nn.MSELoss()
 			self.reward_head = nn.Linear(self.hidden_dim, 1)
-	
+			nn.init.kaiming_normal_(self.reward_head.weight)
+			if self.reward_head.bias is not None:
+				nn.init.zeros_(self.reward_head.bias)	
+
 	def add_model_tags(self, tag):
 		pass
 
@@ -481,7 +484,7 @@ def train_tree_expansion(policy_model,
 		generated_tokens = generated_ids[:, prompt_length:]
 		
 		# Convert generations to tree structure, back up values, and process
-		print ('building and processing tree')
+		#print ('building and processing tree')
 		tree = convert_generations_to_tree(generated_ids)
 		completions = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
 		values = test_correctness(completions, answer, value_constant)
@@ -490,7 +493,7 @@ def train_tree_expansion(policy_model,
 		token_sequences = get_token_sequences(tree)
 		num_leaves = len([node['value'] for node in tree.values() if node['is_leaf']])
 		correct_leaves = sum([node['value'] for node in tree.values() if node['is_leaf']]) / value_constant
-		print (f'Correct paths: {correct_leaves}')	
+		#print (f'Correct paths: {correct_leaves}')	
 		value_batch = get_value_batch(tree, token_values)
 		token_batch = get_token_batch(tree, token_sequences)
 		
@@ -550,7 +553,7 @@ def train_loop(policy_model,
 			generate_batch=512,
 			train_steps=1000,
 			batch_size=16,
-			learning_rate=1e-4,
+			learning_rate=1e-5,
 			value_constant=10.,
 			log_steps=10,
 			eval_steps=100,
