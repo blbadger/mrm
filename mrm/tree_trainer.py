@@ -75,9 +75,9 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 		if is_reward_model:
 			self.loss_fn = nn.MSELoss()
 			self.reward_head = nn.Linear(self.hidden_dim, 1)
-			nn.init.kaiming_normal_(self.reward_head.weight)
-			if self.reward_head.bias is not None:
-				nn.init.zeros_(self.reward_head.bias)	
+			#nn.init.kaiming_normal_(self.reward_head.weight)
+			#if self.reward_head.bias is not None:
+			#	nn.init.zeros_(self.reward_head.bias)	
 
 	def add_model_tags(self, tag):
 		pass
@@ -135,8 +135,8 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 	def forward(self, input_ids, labels=None, **kwargs):
 		is_recurrent = input_ids.shape[1] < self.seq_len
 		# mask pad tokens in labels for loss computation
-		if labels is not None:
-			labels = torch.where(labels==tokenizer.pad_token_id, -100., labels).to(self.input_layer.weight.dtype)
+		#if labels is not None:
+		#	print (f'Input Ids: {input_ids[:, -256:]},\n Labels: {labels[:, -256:]}')
 		if not self.cache_built and is_recurrent:
 			self.build_cache(input_ids)
 		index = input_ids.shape[1] - 1
@@ -153,8 +153,9 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 		else:
 			# reward model output
 			output = self.reward_head(x).squeeze(-1)
+			#print (f'output: {output[:, -256:]}')
 			if labels is not None:
-				loss = self.loss_fn(output, labels)
+				loss = self.loss_fn(output[:, -256:], labels[:, -256:])
 			else:
 				loss = 0
 			return CausalLMOutput(loss=loss, logits=output)
@@ -377,7 +378,7 @@ def train_tree_expansion(policy_model,
 			train_steps=200000,
 			tokens_until_expansion=20,
 			batch_size=8,
-			learning_rate=1e-4,
+			learning_rate=1e-6,
 			value_constant=10.,
 			log_steps=1,
 			eval_steps=100,
@@ -551,9 +552,9 @@ def train_loop(policy_model,
 			tokenizer,
 			accelerator=None,
 			generate_batch=512,
-			train_steps=1000,
+			train_steps=2000,
 			batch_size=16,
-			learning_rate=1e-5,
+			learning_rate=1e-6,
 			value_constant=10.,
 			log_steps=10,
 			eval_steps=100,
@@ -612,9 +613,6 @@ def train_loop(policy_model,
 			padding='max_length', 
 			padding_side='left').to(device)
 		
-		if accelerator.is_main_process:
-			accelerator.print(f"Step {step}/{train_steps}: Generating {generate_batch} samples per question...")
-
 		if hasattr(policy_model, 'module'):
 			policy_model.module.clear_cache()
 		else:
@@ -640,29 +638,37 @@ def train_loop(policy_model,
 		tree = tree_backup(tree, values)
 		token_values = get_token_values(tree)
 		token_sequences = get_token_sequences(tree)
-		num_leaves = len([node['value'] for node in tree.values() if node['is_leaf']])
+		#num_leaves = len([node['value'] for node in tree.values() if node['is_leaf']])
 		correct_leaves = sum([node['value'] for node in tree.values() if node['is_leaf']]) / value_constant
-		tqdm.write((f'Correct paths: {int(correct_leaves)}'))
+		#tqdm.write((f'Correct paths: {int(correct_leaves)}'))
 		value_batch = get_value_batch(tree, token_values)
 		token_batch = get_token_batch(tree, token_sequences)
-		
-		# Online training batches
-		num_leaves = len(token_sequences)
-		pad_number = generate_batch - num_leaves
+		num_leaves = token_batch.shape[0]
+		#print (value_batch, values)
 		
 		# pad in the batch dimension to avoid wait_for_everyone hang
-		token_sequences = torch.cat((token_batch, token_batch[:pad_number]), dim=0)
-		value_batch = torch.cat((value_batch, value_batch[:pad_number]), dim=0)
+		pad_number = generate_batch - num_leaves
+
+		#print (num_leaves, token_batch.shape, value_batch.shape)
+		token_sequences = torch.cat((token_batch, token_batch[:pad_number, :]), dim=0)
+		value_batch = torch.cat((value_batch, value_batch[:pad_number, :]), dim=0)
 		num_samples = token_sequences.shape[0]
 		accumulation_steps = num_samples // batch_size
 		accelerator.wait_for_everyone()
-		for batch_idx in range(0, len(generated_ids), batch_size):
+		#print (token_sequences.shape, value_batch.shape, pad_number, num_leaves, len(generated_ids))
+		for batch_idx in range(0, token_sequences.shape[0], num_samples):
 			optimizer.zero_grad()
 			batch_end = min(batch_idx + batch_size, num_samples)
 			batch_ids = generated_ids[batch_idx:batch_end]
 			batch_values = value_batch[batch_idx:batch_end]
 			batch_input_ids = torch.tensor(batch_ids, dtype=torch.long).to(device)
 			batch_target_values = torch.tensor(batch_values, dtype=torch.float).to(device)
+			# positive control
+			#good_indices = torch.argwhere(batch_values[:, -1] > 0)
+			#print (good_indices)
+			#if good_indices.dim() > 0:
+			#	batch_input_ids[good_indices, -100:] = torch.ones((len(good_indices), 100), dtype=torch.long).to(batch_input_ids.device) * 9
+			#	print ('here', good_indices, batch_input_ids[good_indices, :])
 			output = reward_model(batch_input_ids, labels=batch_target_values)
 
 			loss = output.loss
