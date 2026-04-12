@@ -134,6 +134,7 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 
 	def forward(self, input_ids, labels=None, **kwargs):
 		is_recurrent = input_ids.shape[1] < self.seq_len
+		print (is_recurrent, input_ids, labels)
 		# mask pad tokens in labels for loss computation
 		#if labels is not None:
 		#	print (f'Input Ids: {input_ids[:, -256:]},\n Labels: {labels[:, -256:]}')
