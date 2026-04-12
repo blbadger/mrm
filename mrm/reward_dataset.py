@@ -146,7 +146,9 @@ if __name__ == "__main__":
 	train_dataset, eval_dataset = dataset['train'], dataset['test']
 	print (len(train_dataset))
 	train_dataset = train_dataset.map(prepare_nshot, num_proc=16)
-
+	train_dataset = train_dataset.remove_columns('question')
+	train_dataset = train_dataset.rename_column('prompt', 'question') # assign n shot
+	print (train_dataset[0])
 	tokenized_length = 1024
 	dim = 1024
 	layers = 16
