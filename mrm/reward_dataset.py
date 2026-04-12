@@ -21,15 +21,16 @@ import shutil
 from repeat_main import MLPMixer
 from cached_inference import CachedMLPMixer
 from recurrent_inference import RecurrentMLPMixer
-from tree_trainer imprt DualMixer
+from tree_trainer import DualMixer
 from transformers import TextStreamer
-from dual_srm import DualMLPMixer, convert_generations_to_tree, tree_backup, test_correctness 
-from dual_srm import get_token_sequences, get_token_values, get_token_batch, get_value_batch, get_token_batch, get_evaluations, assign_leaf_node_values, answer_extract, output_extract
+from tree_trainer import DualMLPMixer, convert_generations_to_tree, tree_backup, test_correctness 
+from tree_trainer import get_token_sequences, get_token_values, get_token_batch, get_value_batch, get_token_batch, get_evaluations, assign_leaf_node_values, answer_extract, output_extract
 import warnings
 import time
 import uuid
 import pprint
 from tqdm import tqdm
+from datasets import Dataset
 warnings.simplefilter(action='ignore', category=UserWarning)
 
 
@@ -50,7 +51,7 @@ def generate_values(policy_model,
 		generate_batch=512,
 		generate_steps=5000,
 		value_constant=10.,
-		save_every=1000,
+		save_every=5000,
 		output_path=''
 		):
 
@@ -72,7 +73,9 @@ def generate_values(policy_model,
 	process_indices = list(range(start_idx, end_idx))
 	print(f"Process {process_index}: Training on indices {start_idx} to {end_idx}")
 
-	for step in tqdm(range(train_steps)):
+	total_tokens = []
+	total_values = []
+	for step in tqdm(range(generate_steps)):
 		# Get a dataset element (cycle through process-specific indices)
 		local_idx = step % len(process_indices)
 		data_idx = process_indices[local_idx]
@@ -115,18 +118,17 @@ def generate_values(policy_model,
 		correct_leaves = sum([node['value'] for node in tree.values() if node['is_leaf']]) / value_constant
 		value_batch = get_value_batch(tree, token_values)
 		token_batch = get_token_batch(tree, token_sequences)
-		total_tokens = torch.cat((total_tokens, token_batch), dim=0)
-		value_batch = torch.cat((total_values, value_batch), dim=0)
+		total_tokens.append(token_batch.tolist())
+		total_values.append(value_batch.tolist())
 		accelerator.wait_for_everyone()
 
-		if step % save_every and step > 0:
-			total_tokens = accelerator.gather(total_tokens).to('cpu')
-			total_values = accelerator.gather(total_values).to('cpu')
-			dataset_dict = {'input_ids': total_tokens.tolist(), 'values': total_values.tolist()}
+		if step % save_every==0 and step > 0:
+			print (len(total_tokens), len(total_values))
+			dataset_dict = {'input_ids': total_tokens, 'values': total_values}
 			dataset = Dataset.from_dict(dataset_dict)
-			dataset.save_to_disk(output_path + f'_{step}')
-			total_tokens = torch.tensor([]).to(device)
-			total_values= torch.tensor([]).to(device)
+			dataset.save_to_disk(output_path + f'_{process_index}')
+			total_tokens = []
+			total_values= []
 
 	return
 
@@ -142,7 +144,8 @@ if __name__ == "__main__":
 
 	dataset = load_from_disk(f"{data_root}/gsm8k", "main")
 	train_dataset, eval_dataset = dataset['train'], dataset['test']
-	train_dataset = train_dataset.map(prepare_nshot, num_proc=16, use_random=True)
+	print (len(train_dataset))
+	train_dataset = train_dataset.map(prepare_nshot, num_proc=16)
 
 	tokenized_length = 1024
 	dim = 1024
@@ -159,5 +162,5 @@ if __name__ == "__main__":
 	print ('model loaded')
 	policy_model = torch.compile(policy_model)
 	output_path = f'{data_root}/gsm8k_rewards'
-	train_loop(policy_model, reward_model, train_dataset,eval_dataset, tokenizer, output_path=output_path)
+	generate_values(policy_model, train_dataset, tokenizer, output_path=output_path)
 
