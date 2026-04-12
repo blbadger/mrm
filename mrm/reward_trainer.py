@@ -11,7 +11,7 @@ from prettytable import PrettyTable
 import os
 from dotenv import load_dotenv
 import shutil
-from tree_trainer import DualMLPMixer
+from tree_trainer import DualMixer
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -30,24 +30,25 @@ if __name__ == "__main__":
 	n_heads = 4
 	kernel = 1
 
-	reward_model = DualMixer(
+	model = DualMixer(
 		n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
 		mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True, is_reward_model=True).float()
 
+	model.loss_fn = nn.L1Loss()
 	# initialize with policy model weights (aside from reward head)
 	reward_model_path=f'{checkpoint_root}/gsm8k_SFT_srm_c1024/meta-chkpt-300/model.safetensors'
-	load_model(reward_model, reward_model_path, strict=False)
+	load_model(model, reward_model_path, strict=False)
 
 	n_gpus = torch.cuda.device_count()
 	total_batch_size = 64 #  16x4 for nctx=1024
 	batch_size = total_batch_size // n_gpus
-	train_path = f"{data_root}/gsm8k_rewards_t512"
+	train_path = f"{data_root}/gsm8k_rewards_t512_0shot/full_dataset"
 
-	output_dir = f"{checkpoint_root}/gsm8k_reward_model_t512/full_dataset"
+	output_dir = f"{checkpoint_root}/gsm8k_reward_model_t512_0shot"
   
 	datasets.config.IN_MEMORY_MAX_SIZE = 1e9
 	train_dataset = load_from_disk(train_path, keep_in_memory=None).skip(10000)
-	test_dataset = load_from_disk(test_path, keep_in_memory=None).take(10000)
+	test_dataset = load_from_disk(train_path, keep_in_memory=None).take(10000)
 	print(len(train_dataset), len(test_dataset))
 	mlflow.end_run()
 	print("training begun")
@@ -61,7 +62,7 @@ if __name__ == "__main__":
 		warmup_steps=4000,
 		eval_steps=4000,
 		save_steps=8000,
-		learning_rate=2e-4,
+		learning_rate=2e-5,
 		fp16=True,
 		eval_strategy="steps",
 		output_dir=output_dir,
