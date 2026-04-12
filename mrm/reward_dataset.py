@@ -49,9 +49,9 @@ def generate_values(policy_model,
 		tokenizer,
 		accelerator=None,
 		generate_batch=512,
-		generate_steps=5000,
+		generate_steps=2000,
 		value_constant=10.,
-		save_every=5000,
+		save_every=500,
 		output_path=''
 		):
 
@@ -118,15 +118,15 @@ def generate_values(policy_model,
 		correct_leaves = sum([node['value'] for node in tree.values() if node['is_leaf']]) / value_constant
 		value_batch = get_value_batch(tree, token_values)
 		token_batch = get_token_batch(tree, token_sequences)
-		total_tokens.append(token_batch.tolist())
-		total_values.append(value_batch.tolist())
+		total_tokens += token_batch.tolist()
+		total_values += value_batch.tolist()
 		accelerator.wait_for_everyone()
 
 		if step % save_every==0 and step > 0:
 			print (len(total_tokens), len(total_values))
 			dataset_dict = {'input_ids': total_tokens, 'values': total_values}
 			dataset = Dataset.from_dict(dataset_dict)
-			dataset.save_to_disk(output_path + f'_{process_index}')
+			dataset.save_to_disk(output_path + f'/{process_index}_{step}')
 			total_tokens = []
 			total_values= []
 
@@ -161,6 +161,6 @@ if __name__ == "__main__":
 	load_model(policy_model, model_path)
 	print ('model loaded')
 	policy_model = torch.compile(policy_model)
-	output_path = f'{data_root}/gsm8k_rewards'
+	output_path = f'{data_root}/gsm8k_rewards_t512'
 	generate_values(policy_model, train_dataset, tokenizer, output_path=output_path)
 
