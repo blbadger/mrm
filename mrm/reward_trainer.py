@@ -43,7 +43,7 @@ if __name__ == "__main__":
     batch_size = total_batch_size // n_gpus
     train_path = f"{data_root}/gsm8k_rewards_t512"
 
-    output_dir = f"{checkpoint_root}/gsm8k_reward_model_t512"
+    output_dir = f"{checkpoint_root}/gsm8k_reward_model_t512/full_dataset"
   
     datasets.config.IN_MEMORY_MAX_SIZE = 1e9
     train_dataset = load_from_disk(train_path, keep_in_memory=None).skip(10000)
