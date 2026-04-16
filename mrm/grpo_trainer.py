@@ -2,7 +2,7 @@ import torch
 import re
 from trl import GRPOConfig, GRPOTrainer
 from safetensors.torch import load_model
-from transformers import AutoTokenizer, LlamaConfig
+from transformers import AutoTokenizer, LlamaConfig, LlamaForCausalLM
 from datasets import load_dataset, load_from_disk, Dataset
 from dual_srm import DualMLPMixer
 from dotenv import load_dotenv
@@ -158,7 +158,7 @@ if __name__ == '__main__':
     tokenizer.pad_token = tokenizer.eos_token
     n_vocab = len(tokenizer)
     print("Vocab size: ", n_vocab)
-
+	
     tokenized_length = 1024
     dim = 1024
     layers = 16
@@ -171,6 +171,7 @@ if __name__ == '__main__':
     model.is_gradient_checkpointing = False
     print (model)
 
+    model = LlamaForCausalLM.from_pretrained(f'{checkpoint_root}/gsm8k_SFT_transformer_c1024/checkpoint-300')
     dataset = load_dataset("openai/gsm8k", "main")
     train_dataset, eval_dataset = dataset['train'], dataset['test']
     print (train_dataset[0])
@@ -179,12 +180,12 @@ if __name__ == '__main__':
     eval_dataset = eval_dataset.map(prepare_nshot, num_proc=16)
     print (len(train_dataset))
     #model_path=f'{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
-    model_path=f'{checkpoint_root}/gsm8k_sft_srm_c1024/checkpoint-1100/model.safetensors'
-    load_model(model, model_path)
+    #model_path=f'{checkpoint_root}/gsm8k_sft_srm_c1024/checkpoint-1100/model.safetensors'
+    #load_model(model, model_path)
 
     max_prompt_length = tokenized_length - 256
 
-    output_dir = f'{checkpoint_root}/gsm8k_srm_grpo_0beta_s1024_b8x4'
+    output_dir = f'{checkpoint_root}/gsm8k_transformer_s5_b15x'
     training_args = GRPOConfig(
         learning_rate = 2e-5,
         weight_decay = 0.1,
@@ -192,9 +193,9 @@ if __name__ == '__main__':
         lr_scheduler_type = "cosine",
         optim = "adamw_torch",
         logging_steps = 1,
-        per_device_train_batch_size=100,
+        per_device_train_batch_size=15,
         gradient_accumulation_steps=1,
-        num_generations = 50, 
+        num_generations = 5, 
         #max_prompt_length = max_prompt_length,
         max_completion_length = tokenized_length - max_prompt_length,
         num_train_epochs = 12,
@@ -204,7 +205,7 @@ if __name__ == '__main__':
         output_dir = output_dir,
         fp16=True,
         beta=0.,
-        torch_compile=True, 
+       # torch_compile=True, 
         #beta=0., 
         temperature = 0.7, # NB: top_p=0.9 supplied directly to generate in grpo_trainer
 )
@@ -220,4 +221,4 @@ if __name__ == '__main__':
         eval_dataset = eval_dataset
     )
     #training_args.save_json(output_dir + '/checkpoint-1250')
-    trainer.train(output_dir + '/checkpoint-700')
+    trainer.train()

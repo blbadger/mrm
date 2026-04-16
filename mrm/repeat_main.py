@@ -808,8 +808,8 @@ if __name__ == "__main__":
     n_gpus = torch.cuda.device_count()
     total_batch_size = 64 #  128
     batch_size = total_batch_size // n_gpus
-    train_path = f"{data_root}/finemath-4-tokenized-train-c1024-8k"
-    test_path = f"{data_root}/finemath-4-tokenized-test-c1024-8k"
+    train_path = f"{data_root}/gsm-tokenized-train-c1024-8k-debatched"
+    test_path = f"{data_root}/gsm-tokenized-test-c1024-8k-debatched"
     output_dir = f"{checkpoint_root}/gsm8k_finemathpre_{n_heads}_mixed_decay_nonparallel_projs_k{kernel}_{dim}_n{layers}_c{tokenized_length}_b{batch_size}x{n_gpus}"
   
     datasets.config.IN_MEMORY_MAX_SIZE = 1e9
@@ -828,7 +828,7 @@ if __name__ == "__main__":
         warmup_steps=4000,
         eval_steps=4000,
         save_steps=8000,
-        learning_rate=2e-5,
+        learning_rate=1e-4,
         fp16=True,
         eval_strategy="steps",
         output_dir=output_dir,

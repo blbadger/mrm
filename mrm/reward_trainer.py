@@ -44,16 +44,19 @@ if __name__ == "__main__":
 	batch_size = total_batch_size // n_gpus
 	train_path = f"{data_root}/gsm8k_rewards_t512_0shot/full_dataset"
 
-	output_dir = f"{checkpoint_root}/gsm8k_reward_model_t512_0shot"
+	output_dir = f"{checkpoint_root}/gsm8k_reward_model_t512_l1loss_0shot"
   
 	datasets.config.IN_MEMORY_MAX_SIZE = 1e9
 	train_dataset = load_from_disk(train_path, keep_in_memory=None).skip(10000)
 	test_dataset = load_from_disk(train_path, keep_in_memory=None).take(10000)
-	print(len(train_dataset), len(test_dataset))
+#	train_dataset.rename_column('values', 'labels')
+#	test_dataset.rename_column('values', 'labels')
+	#print(len(train_dataset), len(test_dataset))
+	#print (train_dataset[0])
 	mlflow.end_run()
 	print("training begun")
-	print(model)
-	print (output_dir)
+	#print(model)
+	print (f'Saving results to {output_dir}')
 	training_arguments = transformers.TrainingArguments(
 		num_train_epochs=2,
 		per_device_train_batch_size=batch_size,
@@ -62,7 +65,7 @@ if __name__ == "__main__":
 		warmup_steps=4000,
 		eval_steps=4000,
 		save_steps=8000,
-		learning_rate=2e-5,
+		learning_rate=1e-4,
 		fp16=True,
 		eval_strategy="steps",
 		output_dir=output_dir,
@@ -71,7 +74,6 @@ if __name__ == "__main__":
 		save_safetensors=True,
 		max_steps=200000,
 		torch_compile=True,
-		label_names=['rewards']
 	)
 
 	trainer = transformers.Trainer(
@@ -87,6 +89,6 @@ if __name__ == "__main__":
 	if not os.path.isdir(output_dir): 
 		os.mkdir(output_dir) 
 	shutil.copy(code_path, output_dir) 
-	print (trainer.evaluate())
+	#print (trainer.evaluate())
 	model.train()
 	trainer.train()
