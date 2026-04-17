@@ -21,6 +21,8 @@ import warnings
 warnings.simplefilter(action='ignore', category=UserWarning)
 import pytest
 
+from grpo_trainer import DualMixer as RecurrentInference
+
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 def test_row_repeat_equivalence(trained_model=True):

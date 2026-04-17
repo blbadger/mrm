@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 import os
 from transformers.generation import GenerationMixin, GenerationConfig
 from transformers.modeling_outputs import CausalLMOutput
+import shutil
 
 class DualMixer(DualMLPMixer, GenerationMixin):
 
@@ -65,6 +66,9 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 
     def _is_stateful(self):
         return False
+    
+    def is_remote_code(self):
+        return True
 
     def build_cache(self, input_ids):
         for i in range(len(input_ids[0])-1):
@@ -98,6 +102,7 @@ class DualMixer(DualMLPMixer, GenerationMixin):
             shift_logits = shift_logits.view(-1, self.vocab_size)
             shift_labels = shift_labels.view(-1)
             loss = self.loss_fn(shift_logits, shift_labels)
+
             return CausalLMOutput(loss=loss, logits=logits)
         else:
             return CausalLMOutput(loss=0, logits=logits)
@@ -124,9 +129,8 @@ def output_extract(predicted_output):
 def correctness_reward_func(prompts, completions, answer, **kwargs) -> list[float]:
     extracted_responses = [output_extract(c) for c in completions]
     extracted_answers = [output_extract(a) for a in answer]
-    #print('='*60, f"Question:\n{prompts[1]}", f"\nAnswer:\n{answer[1]}\n",'-'*50, f"\nResponse:\n{completions[1]}", f"\nExtracted:\n{extracted_responses[1]}\n")
+    #print (completions[0], answer[0], extracted_responses[0], extracted_answers[0])
     rewards = [1.0 if r == a else 0.0 for r, a in zip(extracted_responses, extracted_answers)]
-    #index = rewards.index(1.0)
 
 #    print('='*60, f"Question:\n{prompts[index]}", f"\nAnswer:\n{answer[index]}\n",'-'*50, f"\nResponse:\n{completions[index]}", f"\nExtracted:\n{extracted_responses[index]}\n")
     return [1.0 if r == a else 0.0 for r, a in zip(extracted_responses, extracted_answers)]
@@ -180,12 +184,15 @@ if __name__ == '__main__':
     eval_dataset = eval_dataset.map(prepare_nshot, num_proc=16)
     print (len(train_dataset))
     #model_path=f'{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
-    #model_path=f'{checkpoint_root}/gsm8k_sft_srm_c1024/checkpoint-1100/model.safetensors'
+    #model_path=f'{checkpoint_root}/gsm8k_SFT_srm_c1024/meta-chkpt-300/model.safetensors'
     #load_model(model, model_path)
-
+    model = model.to('cuda')
+    input_ids = tokenizer.encode('Q: What is two plus two? A: Four. Q: What is one plus four? A:', return_tensors='pt', add_special_tokens=False).to('cuda')
+    output = torch.tensor(model.generate(input_ids, max_new_tokens=16, temperature=0.7, do_sample=True, top_p=0.9))
+    print (output, tokenizer.decode(output[0]))
     max_prompt_length = tokenized_length - 256
 
-    output_dir = f'{checkpoint_root}/gsm8k_transformer_s5_b15x'
+    output_dir = f'{checkpoint_root}/gsm8k_transformer_s5_b15x4'
     training_args = GRPOConfig(
         learning_rate = 2e-5,
         weight_decay = 0.1,
@@ -194,20 +201,19 @@ if __name__ == '__main__':
         optim = "adamw_torch",
         logging_steps = 1,
         per_device_train_batch_size=15,
+        steps_per_generation=1,
         gradient_accumulation_steps=1,
         num_generations = 5, 
-        #max_prompt_length = max_prompt_length,
         max_completion_length = tokenized_length - max_prompt_length,
-        num_train_epochs = 12,
+        num_train_epochs = 3,
         save_steps = 100,
         max_grad_norm = 0.1,
         report_to = "none",
         output_dir = output_dir,
         fp16=True,
         beta=0.,
-       # torch_compile=True, 
-        #beta=0., 
-        temperature = 0.7, # NB: top_p=0.9 supplied directly to generate in grpo_trainer
+        #torch_compile=True, 
+        temperature = 0.7, 
 )
 	
     trainer = GRPOTrainer(
@@ -217,8 +223,13 @@ if __name__ == '__main__':
             correctness_reward_func,
         ],
         args = training_args,
-        train_dataset = eval_dataset,
+        train_dataset = train_dataset,
         eval_dataset = eval_dataset
     )
+    # save driver code snapshot in checkpoint dir 
+    code_path = os.path.abspath(__file__) 
+    if not os.path.isdir(output_dir): 
+        os.mkdir(output_dir) 
+    shutil.copy(code_path, output_dir) 
     #training_args.save_json(output_dir + '/checkpoint-1250')
     trainer.train()
