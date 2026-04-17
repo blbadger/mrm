@@ -21,7 +21,7 @@ import warnings
 warnings.simplefilter(action='ignore', category=UserWarning)
 import pytest
 
-from grpo_trainer import DualMixer as RecurrentInference
+from inference import RecurrentInference
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 

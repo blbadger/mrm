@@ -51,6 +51,7 @@ class DualMixer(DualMLPMixer, GenerationMixin):
         self.cache_built = False
         self.device = self.output_layer.weight.device
         self.warnings_issued={}
+        self.index = 0
     
     def add_model_tags(self, tag):
         print (tag)
@@ -76,6 +77,7 @@ class DualMixer(DualMLPMixer, GenerationMixin):
             for block in self.mixer_blocks:
                 x = block(x, i, True)
         self.cache_built = True
+        self.index = i+1
         return
 
     def clear_cache(self):
@@ -83,12 +85,14 @@ class DualMixer(DualMLPMixer, GenerationMixin):
             for h in range(len(block.token_mixing_layer.mixer_heads)):
                 block.token_mixing_layer.mixer_heads[h].cache = torch.zeros(self.hidden_dim//self.n_heads).to('cuda') # only for mixed heads
         self.cache_built = False
+        self.index = 0
 
     def forward(self, input_ids, labels=None, **kwargs):
         is_recurrent = input_ids.shape[1] < self.seq_len
         if not self.cache_built and is_recurrent:
             self.build_cache(input_ids)
-        index = input_ids.shape[1] - 1
+        #index = input_ids.shape[1] - 1
+        index = self.index
         if is_recurrent:
             input_ids = input_ids[:, -1] # last token only
         # model's forward pass
@@ -96,6 +100,7 @@ class DualMixer(DualMLPMixer, GenerationMixin):
         for block in self.mixer_blocks:
             x = block(x, index, is_recurrent)
         logits = self.output_layer(x).unsqueeze(1)
+        self.index += 1
         if labels is not None:
             shift_logits = logits[:, :-1].contiguous()
             shift_labels = labels[:, 1:].contiguous()
@@ -175,7 +180,7 @@ if __name__ == '__main__':
     model.is_gradient_checkpointing = False
     print (model)
 
-    model = LlamaForCausalLM.from_pretrained(f'{checkpoint_root}/gsm8k_SFT_transformer_c1024/checkpoint-300')
+    #model = LlamaForCausalLM.from_pretrained(f'{checkpoint_root}/gsm8k_SFT_transformer_c1024/checkpoint-300')
     dataset = load_dataset("openai/gsm8k", "main")
     train_dataset, eval_dataset = dataset['train'], dataset['test']
     print (train_dataset[0])
@@ -183,12 +188,12 @@ if __name__ == '__main__':
     print (train_dataset[0])
     eval_dataset = eval_dataset.map(prepare_nshot, num_proc=16)
     print (len(train_dataset))
-    #model_path=f'{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
+    model_path=f'{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
     #model_path=f'{checkpoint_root}/gsm8k_SFT_srm_c1024/meta-chkpt-300/model.safetensors'
-    #load_model(model, model_path)
+    load_model(model, model_path)
     model = model.to('cuda')
     input_ids = tokenizer.encode('Q: What is two plus two? A: Four. Q: What is one plus four? A:', return_tensors='pt', add_special_tokens=False).to('cuda')
-    output = torch.tensor(model.generate(input_ids, max_new_tokens=16, temperature=0.7, do_sample=True, top_p=0.9))
+    output = torch.tensor(model.generate(input_ids, max_new_tokens=16, temperature=0., do_sample=False))
     print (output, tokenizer.decode(output[0]))
     max_prompt_length = tokenized_length - 256
 
