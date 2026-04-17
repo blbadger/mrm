@@ -44,7 +44,7 @@ def test_recurrent_dual(trained_model=True):
         n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
         mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True).float().to(device)
 
-    cached_model = CachedInferenceMLPMixer(
+    cached_model = InferenceMLPMixer(
         n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
         mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True).float().to(device)
 
@@ -53,12 +53,12 @@ def test_recurrent_dual(trained_model=True):
    
     load_model(dual_model, f"{checkpoint_root}/gsm8k_SFT_srm_c1024/chkpt-300/model.safetensors")
     load_model(cached_model, f"{checkpoint_root}/gsm8k_SFT_srm_c1024/chkpt-300/model.safetensors")
-    text ='''Question: Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. How many clips did Natalia sell altogether in April and May? 
-Answer: Natalia sold 48/2 = <<48/2=24>>24 clips in May.
-Natalia sold 48+24 = <<48+24=72>>72 clips altogether in April and May.
-#### 72
- Question: Ahmed and Emily are having a contest to see who can get the best grade in the class. There have been 9 assignments and Ahmed has a 91 in the class. Emily has a 92. The final assignment is worth the same amount as all the other assignments. Emily got a 90 on the final assignment. What is the minimum grade Ahmed needs to get to beat Emily if all grades are whole numbers? 
- Answer:'''
+#     text ='''Question: Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. How many clips did Natalia sell altogether in April and May? 
+# Answer: Natalia sold 48/2 = <<48/2=24>>24 clips in May.
+# Natalia sold 48+24 = <<48+24=72>>72 clips altogether in April and May.
+# #### 72
+#  Question: Ahmed and Emily are having a contest to see who can get the best grade in the class. There have been 9 assignments and Ahmed has a 91 in the class. Emily has a 92. The final assignment is worth the same amount as all the other assignments. Emily got a 90 on the final assignment. What is the minimum grade Ahmed needs to get to beat Emily if all grades are whole numbers? 
+#  Answer:'''
     text = 'Four score and seven years ago, '
     input_ids = torch.tensor(tokenizer.encode(text)[1:]).unsqueeze(0).to(device) # ignore bos token
     print (input_ids)

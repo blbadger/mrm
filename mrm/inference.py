@@ -71,6 +71,22 @@ class InferenceMLPMixer(CachedMLPMixer, GenerationMixin):
 	def count_params(self):
 		return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
+	def add_model_tags(self, tag):
+		print (tag)
+
+	def gradient_checkpointing_enable(self, *args, **kwargs):
+		pass
+
+
+	def count_params(self):
+		return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+	def _is_stateful(self):
+		return False
+	
+	def is_remote_code(self):
+		return True
+
 	def build_cache(self, input_ids):
 		for i in range(1, len(input_ids[0])):
 			x = self.input_layer(input_ids[:, :i])
@@ -155,24 +171,29 @@ class RecurrentInference(RecurrentMLPMixer, GenerationMixin):
 			for block in self.mixer_blocks:
 				x = block(x, i)
 		self.cache_built = True
+		self.index = i + 1
 		return
+
 	def clear_cache(self):
 		for block in self.mixer_blocks:
 			for h in range(len(block.token_mixing_layer.mixer_heads)):
 				block.token_mixing_layer.mixer_heads[h].cache = torch.zeros(self.hidden_dim//self.n_heads).to('cuda') # only for mixed heads
-				self.cache_built = False
+		self.cache_built = False
+		self.index = 0
+		return
 
 	def forward(self, input_ids, labels=None, **kwargs):
 		if not self.cache_built:
 			self.build_cache(input_ids)
 		index = input_ids.shape[1] - 1
 		input_ids = input_ids[:, -1] # last token only
-		
+		index = self.index
 		# model's forward pass
 		x = self.input_layer(input_ids)
 		for block in self.mixer_blocks:
 			x = block(x, index)
 		logits = self.output_layer(x).unsqueeze(1)
+		self.index += 1
 		if labels is not None:
 			return CausalLMOutput(loss=0, logits=logits)
 		else:
@@ -182,33 +203,33 @@ class RecurrentInference(RecurrentMLPMixer, GenerationMixin):
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 if __name__ == "__main__":
-    load_dotenv()
-    checkpoint_root = os.getenv('CHECKPOINT_ROOT')
-    data_root = os.getenv('DATA_ROOT')
-    tokenizer = AutoTokenizer.from_pretrained(f"{data_root}/tokenizer_fineweb_8k")
-    tokenizer.pad_token = tokenizer.eos_token
-    n_vocab = tokenizer.vocab_size
-    print("Vocab size: ", n_vocab)
+	load_dotenv()
+	checkpoint_root = os.getenv('CHECKPOINT_ROOT')
+	data_root = os.getenv('DATA_ROOT')
+	tokenizer = AutoTokenizer.from_pretrained(f"{data_root}/tokenizer_fineweb_8k")
+	tokenizer.pad_token = tokenizer.eos_token
+	n_vocab = tokenizer.vocab_size
+	print("Vocab size: ", n_vocab)
 
-    tokenized_length = 1024
-    dim = 1024
-    layers = 16
-    n_heads = 4
-    kernel = 1
+	tokenized_length = 1024
+	dim = 1024
+	layers = 16
+	n_heads = 4
+	kernel = 1
 
-    model = RecurrentInference(
-        n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
-        mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True).float().to(device)
-    generation_config = GenerationConfig()
-    print (model)
-    load_model(model, f"{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors")
-    model = torch.compile(model)
-    text ='''Four score and seven years ago, our'''
-    batch_size = 64000
-    input_ids = torch.tensor(tokenizer.encode(text)[1:]).repeat(batch_size, 1).to(device) # ignore bos token
-    print (input_ids.shape)
-    tokens_to_generate = 1000
-    streamer = TextStreamer(tokenizer, skip_prompt=False)
-    start = time.time()
-    output_ids = model.generate(input_ids, max_length=len(input_ids[0]) + tokens_to_generate, generation_config=generation_config) #, streamer=streamer)
-    print (f'Example: {tokenizer.decode(output_ids[0])}, elapsed time: {time.time() - start}, t/s: {(tokens_to_generate * batch_size)/(time.time() - start)}')
+	model = RecurrentInference(
+		n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
+		mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True).float().to(device)
+	generation_config = GenerationConfig()
+	print (model)
+	load_model(model, f"{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors")
+	model = torch.compile(model)
+	text ='''Four score and seven years ago, our'''
+	batch_size = 64000
+	input_ids = torch.tensor(tokenizer.encode(text)[1:]).repeat(batch_size, 1).to(device) # ignore bos token
+	print (input_ids.shape)
+	tokens_to_generate = 1000
+	streamer = TextStreamer(tokenizer, skip_prompt=False)
+	start = time.time()
+	output_ids = model.generate(input_ids, max_length=len(input_ids[0]) + tokens_to_generate, generation_config=generation_config) #, streamer=streamer)
+	print (f'Example: {tokenizer.decode(output_ids[0])}, elapsed time: {time.time() - start}, t/s: {(tokens_to_generate * batch_size)/(time.time() - start)}')

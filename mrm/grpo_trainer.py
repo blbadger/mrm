@@ -91,7 +91,6 @@ class DualMixer(DualMLPMixer, GenerationMixin):
         is_recurrent = input_ids.shape[1] < self.seq_len
         if not self.cache_built and is_recurrent:
             self.build_cache(input_ids)
-        #index = input_ids.shape[1] - 1
         index = self.index
         if is_recurrent:
             input_ids = input_ids[:, -1] # last token only
