@@ -193,10 +193,10 @@ if __name__ == '__main__':
     model = model.to('cuda')
     input_ids = tokenizer.encode('Q: What is two plus two? A: Four. Q: What is one plus four? A:', return_tensors='pt', add_special_tokens=False).to('cuda')
     output = torch.tensor(model.generate(input_ids, max_new_tokens=16, temperature=0., do_sample=False))
-    print (output, tokenizer.decode(output[0]))
+    print ('\n\n', output, tokenizer.decode(output[0]), '\n\n')
     max_prompt_length = tokenized_length - 256
 
-    output_dir = f'{checkpoint_root}/gsm8k_transformer_s5_b15x4'
+    output_dir = f'{checkpoint_root}/gsm8k_srm_s5_b15x4'
     training_args = GRPOConfig(
         learning_rate = 2e-5,
         weight_decay = 0.1,
@@ -216,7 +216,7 @@ if __name__ == '__main__':
         output_dir = output_dir,
         fp16=True,
         beta=0.,
-        #torch_compile=True, 
+        torch_compile=True, 
         temperature = 0.7, 
 )
 	
@@ -236,4 +236,4 @@ if __name__ == '__main__':
         os.mkdir(output_dir) 
     shutil.copy(code_path, output_dir) 
     #training_args.save_json(output_dir + '/checkpoint-1250')
-    trainer.train()
+    trainer.train(output_dir + '/checkpoint-400')
