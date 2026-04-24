@@ -177,9 +177,9 @@ if __name__ == '__main__':
         n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
         mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True)
     model.is_gradient_checkpointing = False
-    print (model)
+    #print (model)
 
-    #model = LlamaForCausalLM.from_pretrained(f'{checkpoint_root}/gsm8k_SFT_transformer_c1024/checkpoint-300')
+    model = LlamaForCausalLM.from_pretrained(f'{checkpoint_root}/gsm8k_SFT_transformer_c1024/checkpoint-300')
     dataset = load_dataset("openai/gsm8k", "main")
     train_dataset, eval_dataset = dataset['train'], dataset['test']
     print (train_dataset[0])
@@ -187,16 +187,16 @@ if __name__ == '__main__':
     print (train_dataset[0])
     eval_dataset = eval_dataset.map(prepare_nshot, num_proc=16)
     print (len(train_dataset))
-    model_path=f'{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
+    #model_path=f'{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
     #model_path=f'{checkpoint_root}/gsm8k_SFT_srm_c1024/meta-chkpt-300/model.safetensors'
-    load_model(model, model_path)
+    #load_model(model, model_path)
     model = model.to('cuda')
     input_ids = tokenizer.encode('Q: What is two plus two? A: Four. Q: What is one plus four? A:', return_tensors='pt', add_special_tokens=False).to('cuda')
     output = torch.tensor(model.generate(input_ids, max_new_tokens=16, temperature=0., do_sample=False))
     print ('\n\n', output, tokenizer.decode(output[0]), '\n\n')
     max_prompt_length = tokenized_length - 256
 
-    output_dir = f'{checkpoint_root}/gsm8k_srm_s5_b15x4'
+    output_dir = f'{checkpoint_root}/gsm8k_transformer_s10_b15x4'
     training_args = GRPOConfig(
         learning_rate = 2e-5,
         weight_decay = 0.1,
@@ -207,7 +207,7 @@ if __name__ == '__main__':
         per_device_train_batch_size=15,
         steps_per_generation=1,
         gradient_accumulation_steps=1,
-        num_generations = 5, 
+        num_generations = 10, 
         max_completion_length = tokenized_length - max_prompt_length,
         num_train_epochs = 3,
         save_steps = 100,
@@ -215,8 +215,8 @@ if __name__ == '__main__':
         report_to = "none",
         output_dir = output_dir,
         fp16=True,
-        beta=0.,
-        torch_compile=True, 
+        beta=0.04,
+        #torch_compile=True, 
         temperature = 0.7, 
 )
 	
@@ -236,4 +236,4 @@ if __name__ == '__main__':
         os.mkdir(output_dir) 
     shutil.copy(code_path, output_dir) 
     #training_args.save_json(output_dir + '/checkpoint-1250')
-    trainer.train(output_dir + '/checkpoint-400')
+    trainer.train()

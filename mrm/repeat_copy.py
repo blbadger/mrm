@@ -241,6 +241,13 @@ def copy_labels(labels):
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
+def debatch_dataset(example):
+    tokens = []
+    token_ls = example['input_ids']
+    for i in range(len(token_ls)):
+        tokens += token_ls[i]
+    return {'input_ids': tokens}
+
 if __name__ == "__main__":
     load_dotenv()
     checkpoint_root = os.getenv('CHECKPOINT_ROOT')
@@ -250,25 +257,27 @@ if __name__ == "__main__":
     n_vocab = len(tokenizer)
     print("Vocab size: ", n_vocab)
 
-    tokenized_length = 1024
-    dim = 1024
+    tokenized_length = 2048
+    dim = 256
     layers = 16
-    n_heads = None
-    kernel = 4
+    n_heads = 4
+    kernel = 1
 
     model = CopyMixer(n_vocab, dim,  tokenized_length, layers, kernel=kernel, heads=n_heads, copy=True, 
-        mixed_heads=False, combined_heads=False, decay=False, parallel_heads=False, use_projections=True)
+        mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=False)
 
-    load_model(model, f"{data_root}/fineweb_copy_repeat_k4_256_n16_b16x4/checkpoint-10000/model.safetensors")
+    #load_model(model, f"{data_root}/fineweb_copy_repeat_k4_256_n16_b16x4/checkpoint-10000/model.safetensors")
     train_path = f"{data_root}/fineweb-edu-tokenized-train-c1024"
     test_path = f"{data_root}/fineweb-edu-tokenized-test-c1024"
     
-    output_dir = f"{checkpoint_root}/fineweb_copy_repeat_mixed_noparallel_noprojs_decay_h4_{dim}_n{layers}_b16x4"
+    output_dir = f"{checkpoint_root}/fineweb_copy256_repeat_mixed_noparallel_noprojs_decay_h4_{dim}_n{layers}_b16x4"
     datasets.config.IN_MEMORY_MAX_SIZE = 5e9
-    train_dataset = load_from_disk(train_path, keep_in_memory=None)
-    test_dataset = load_from_disk(test_path, keep_in_memory=None).filter(lambda x: x['input_ids'][-1] != 1).take(5000)
+    train_dataset = load_from_disk(train_path, keep_in_memory=None).take(800000).batch(batch_size=2, num_proc=8).map(debatch_dataset, num_proc=8)
+    test_dataset = load_from_disk(test_path, keep_in_memory=None).take(40000).batch(batch_size=2, num_proc=8).map(debatch_dataset, num_proc=8).filter(lambda x: x['input_ids'][-1] != 1, num_proc=8).take(5000)
+    #train_dataset = load_from_disk(train_path, keep_in_memory=None)
+    #test_dataset = load_from_disk(test_path, keep_in_memory=None).filter(lambda x: x['input_ids'][-1] != 1, num_proc=8).take(5000)
     print(len(train_dataset), len(test_dataset))
-    print (test_dataset[0])
+    print (len(train_dataset[0]['input_ids']), tokenizer.decode(train_dataset[0]['input_ids']))
     mlflow.end_run()
     print("training begun")
     print(model)
@@ -276,9 +285,10 @@ if __name__ == "__main__":
         num_train_epochs=2,
         per_device_train_batch_size=16,
         per_device_eval_batch_size=16,
-        #gradient_accumulation_steps=2,
-        warmup_steps=50,
-        eval_steps=100,
+        gradient_accumulation_steps=1,
+        warmup_steps=500,
+        logging_steps=100,
+        eval_steps=1000,
         save_steps=10000,
         learning_rate=5e-4,
         fp16=True,
@@ -288,7 +298,7 @@ if __name__ == "__main__":
         overwrite_output_dir=True,
         save_safetensors=True,
         max_steps=10000,
-        torch_compile=True,
+        #torch_compile=True,
         # max_grad_norm=200.0
     )
 
