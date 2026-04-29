@@ -43,59 +43,80 @@ data_root = os.getenv('DATA_ROOT')
 class ColRepeatCausalLinear(Module):
 
     def __init__(self, dim: int, embedding_dim=256, decay=False, decay_constant=1, **args):
-        self.weight = Tensor.zeros([1, dim])
-        self.bias = Tensor.zeros([dim])
+        # Standard weight + bias
+        self.weight = Tensor.zeros([1, dim]) # init to randn
+        self.bias = Tensor.zeros([dim]) # init to zero
         self.decay_value = Tensor.ones([1])
         self.decay_constant = decay_constant
         self.first_index = 0
+        self.cache = torch.zeros([embedding_dim]) # TODO: initialize and send to shared mem via custom op
 
-    def forward(self, x: Tensor, index: int, cache: Tensor) -> tuple[Tensor, Tensor]:
+    def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
+        self.weight = self.weight.to(x.device)
+        self.bias = self.bias.to(x.device)
+        self.decay_value = self.decay_value.to(x.device)
         decay_value = (self.decay_value.clip(min=0.9, max=1)**(1/self.decay_constant))
-        out = self.weight[0, index]*x + self.weight[0, index]*decay_value*cache + self.bias[index]
-        new_cache = (out - self.bias[index]) / self.weight[:, index]
-        return out, new_cache
+        out = self.weight[0, index]*x + self.weight[0, index]*decay_value*self.cache + self.bias[index]
+        self.cache = (out - self.bias[index]) / self.weight[:, index] # cache update: factor out weight, remove bias
+        return out
 
 class RowRepeatCausalLinear(Module):
 
     def __init__(self, dim: int, embedding_dim=256, decay=False, decay_constant=1, **args):
-        self.weight = Tensor.ones([1, dim])
-        self.bias = Tensor.zeros([dim])
+        # Standard weight + bias
+        self.weight = Tensor.ones([1, dim]) # init to randn
+        self.bias = Tensor.zeros([dim]) # init to zero
         self.decay_value = Tensor.ones([1])
         self.decay_constant = decay_constant
+        self.cache = torch.zeros([embedding_dim]) # TODO: initialize and send to shared mem via custom op
 
-    def forward(self, x: Tensor, index: int, cache: Tensor) -> tuple[Tensor, Tensor]:
+    def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
+        # expects x in shape [B, E]
+        self.weight = self.weight.to(x.device)
+        self.bias = self.bias.to(x.device)
+        self.decay_value = self.decay_value.to(x.device) 
         decay_value = (self.decay_value.clip(min=0.9, max=1)**(1/self.decay_constant))
-        out = self.weight[0, index]*x + decay_value*cache + self.bias[index]
-        new_cache = out - self.bias[index]
-        return out, new_cache
+        out = self.weight[0, index]*x + decay_value*self.cache + self.bias[index]
+        self.cache = out - self.bias[index]
+        return out
 
 class HeadedRepeatCausalLinear(nn.Module):
-
+    """
+    Mixed-headed repeat module for ParallelRepeatHeads
+    """
     def __init__(self, dim: int, heads: int, head_dim=256, decay=False, decay_constant=1):
         super().__init__()
         self.weight = Tensor.ones([heads, dim])
         self.bias = Tensor.zeros([heads, dim])
         self.heads = heads
-        self.decay_value = Tensor.ones([2, 1])
+        self.decay_value = Tensor.ones([2, 1]) # N.B. only one value used, for back compatability
         self.decay_constant = decay_constant
-        self.head_dim = head_dim
+        global batch_size
+        self.cache = Tensor.zeros([batch_size, heads, head_dim])# first half of cache vectors are row repeat, second half are col repeat
 
-    def forward(self, x: Tensor, index: int, cache: Tensor) -> tuple[Tensor, Tensor]:
-        # cache shape: [batch, heads, head_dim] — passed in, not stored
-        x = x.reshape([x.shape[0]//self.heads, x.shape[1], self.heads])
+    def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
+        # x has shape (b*h) e
+        self.weight = self.weight.to(x.device)
+        self.bias = self.bias.to(x.device)
+        x = x.reshape([x.shape[0]//self.heads, x.shape[1], self.heads]) # reshapes (b h) e -> b e h
         decay_value = (self.decay_value.clip(min=0.9, max=1)**(1/self.decay_constant))
-        cache_beh = cache.permute([0, 2, 1])  # [b, e, h]
+        # reshape cache to (b) e h, b is broadcasted in the next op if necessary
+        self.cache = self.cache.permute([0, 2, 1])
+        
+        # row computation and cache update
+        row_out = self.weight[self.heads//2:, index]*x[..., self.heads//2:] + decay_value[1]*self.cache[..., self.heads//2:]
+        row_out_cache = row_out
 
-        row_out = self.weight[self.heads//2:, index]*x[..., self.heads//2:] + decay_value[1]*cache_beh[..., self.heads//2:]
-        col_out = self.weight[:self.heads//2, index]*x[..., :self.heads//2] + self.weight[:self.heads//2, index]*decay_value[1]*cache_beh[..., :self.heads//2]
-        col_cache = col_out / self.weight[:self.heads//2, index]
-
-        new_cache = F.concat([row_out, col_cache], axis=-1).permute([0, 2, 1])  # back to [b, h, e]
-
+        # col computation and cache update
+        col_out = self.weight[:self.heads//2, index]*x[...,:self.heads//2] + self.weight[:self.heads//2, index]*decay_value[1]*self.cache[..., :self.heads//2]
+        col_out_cache = col_out / self.weight[:self.heads//2, index]
+        self.cache = F.concat([row_out_cache, col_out_cache], axis=-1)
+        self.cache = self.cache.permute([0, 2, 1])
+        
         output = F.concat([col_out, row_out], axis=-1)
         output += self.bias[:, index]
         output = output.reshape([x.shape[0]*self.heads, x.shape[1]])
-        return output, new_cache
+        return output
 
 class ParallelRepeatHeads(Module):
 
@@ -145,18 +166,23 @@ class MixedRepeatHeads(Module):
          
         print (self.mixer_heads)
 
-    def forward(self, x: Tensor, index: int, caches: list[Tensor]) -> tuple[Tensor, list[Tensor]]:
+    def forward(self, x: torch.Tensor, index: int) -> torch.Tensor:
         activations = []
-        new_caches = []
+        # pre-concatenated out projection
         for head in range(self.n_heads):
-            projection = self.proj_head[head](x) if self.use_projections else x[:, head*self.hidden_dim:(head+1)*self.hidden_dim]
-            out, new_cache = self.mixer_heads[head](projection, index, caches[head])
-            activations.append(out)
-            new_caches.append(new_cache)
-        hidden_layer = F.concat(activations, axis=1)
+            if self.use_projections:
+                projection = self.proj_head[head](x)
+            else:
+                projection = x[:, head*self.hidden_dim: (head+1)*self.hidden_dim]
+            conv_projection = self.mixer_heads[head](projection, index)
+            activations.append(conv_projection)
+
+        # concatenate and project multi-headed output
+        hidden_layer = F.concat(activations, axis=1) # [b e]
         if self.use_projections:
             hidden_layer = self.out_proj(hidden_layer)
-        return hidden_layer, new_caches
+
+        return hidden_layer
 
 class LayerNorm(Module):
 
