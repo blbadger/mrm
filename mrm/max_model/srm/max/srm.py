@@ -303,12 +303,11 @@ class RecurrentSRM(nn.Module):
         #index = int(input_ids.shape[-1])
         input_ids = input_ids[:, -1]
         x = self.input_layer(input_ids)
-
         #for i, block in enumerate(self.mixer_blocks):
         #    x, index = block((x, int_index))
-
         x, _ = self.mixer_blocks((x, int_index))
         output = self.output_layer(x)
+        #output = F.argmax(output, axis=1)
         return output
 
     def __call__(self, x: TensorValue, index: int) -> TensorValue:
@@ -326,16 +325,15 @@ if __name__ == "__main__":
     n_vocab =  len(tokenizer)
 
     dtype, device = defaults()
-    print (f'Device: {device}')
     input_string = 'Four score and seven years ago, our forefathers, for the purpose of creating'
     input_tokens = tokenizer(input_string, return_tensors='pt').input_ids[:, 1].unsqueeze(1).to(torch.int64) # no BOS token
-    batch_size = 100
+    batch_size = 5
     input_tokens = input_tokens.repeat(batch_size, 1)
 
     length = torch.tensor([input_tokens.shape[1]]).to(torch.int64)
     tokenized_length = 512
-    dim = 128
-    layers = 4
+    dim = 1024
+    layers = 16
     n_heads = 4
     kernel= 1
 
@@ -354,9 +352,7 @@ if __name__ == "__main__":
     )
 
     int_index = input_tokens.shape[-1]
-    print ('model initialized')
     model = model.to(device)
-    print ('model on device')
     # weight_path = f"{checkpoint_root}/..."
     # trained_weights = safe_open(weight_path)
     # model.load_state_dict(trained_weights)
@@ -370,17 +366,22 @@ if __name__ == "__main__":
     )
 
     model = model.compile(token_type, length_type)
-    print ('Model compilation a completed')
     input_tensor = Tensor.constant(input_tokens, dtype=DType.int64, device=device)
     length = Tensor.constant(length, dtype=DType.int64, device=device)
 
+    async def token_get(output):
+        tokens = F.argmax(input_tensor.to(CPU()))
+        return tokens
+
+    output = model(input_tensor, length)
+    t = F.argmax(output)
     start = time.time()
+    print ('Model compilation completed')
     for i in range(20):
-        print (i)
+        #print (i)
         int_index += 1
-        input_tensor = model(input_tensor, length)
-        input_tensor = F.argmax(input_tensor, axis=1)
-        # tokens = torch.argmax(torch.tensor(output), dim=1)
+        output = model(input_tensor, length)
+        tokens = torch.argmax(torch.tensor(output), dim=1)
         #tokens = dtoken_get(output)
     
     end = time.time()
