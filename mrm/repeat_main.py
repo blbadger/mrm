@@ -6,7 +6,6 @@ from transformers import AutoTokenizer
 import datasets
 from datasets import load_from_disk
 from safetensors.torch import load_model
-import mlflow
 from prettytable import PrettyTable
 import os
 from dotenv import load_dotenv
@@ -741,6 +740,9 @@ class MLPMixer(nn.Module):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
     def forward(self, input_ids, labels=None, **kwargs):
+        if input_ids.dim() > 2:
+            input_ids = input_ids.squeeze(1)
+            labels = labels.squeeze(1)
         if self.copy:
             input_ids = copy_dataset(input_ids)
             if labels is not None:
@@ -808,15 +810,14 @@ if __name__ == "__main__":
     n_gpus = torch.cuda.device_count()
     total_batch_size = 64 #  128
     batch_size = total_batch_size // n_gpus
-    train_path = f"{data_root}/gsm-tokenized-train-c1024-8k-debatched"
-    test_path = f"{data_root}/gsm-tokenized-test-c1024-8k-debatched"
-    output_dir = f"{checkpoint_root}/gsm8k_finemathpre_{n_heads}_mixed_decay_nonparallel_projs_k{kernel}_{dim}_n{layers}_c{tokenized_length}_b{batch_size}x{n_gpus}"
+    train_path = f"{data_root}/gsq_tokenized_1024"
+    test_path = f"{data_root}/gsq_tokenized_1024"
+    output_dir = f"{checkpoint_root}/gsq_{n_heads}_mixed_decay_nonparallel_projs_k{kernel}_{dim}_n{layers}_c{tokenized_length}_b{batch_size}x{n_gpus}"
   
     datasets.config.IN_MEMORY_MAX_SIZE = 1e9
-    train_dataset = load_from_disk(train_path, keep_in_memory=None)
-    test_dataset = load_from_disk(test_path, keep_in_memory=None)
+    train_dataset = load_from_disk(train_path, keep_in_memory=None)['train'].skip(20000)
+    test_dataset = load_from_disk(test_path, keep_in_memory=None)['train'].take(20000)
     print(len(train_dataset), len(test_dataset))
-    mlflow.end_run()
     print("training begun")
     print(model)
     print (output_dir)
@@ -833,10 +834,11 @@ if __name__ == "__main__":
         eval_strategy="steps",
         output_dir=output_dir,
         optim="adamw_torch",
-        overwrite_output_dir=True,
-        save_safetensors=True,
-        max_steps=200000,
-        torch_compile=True
+        #overwrite_output_dir=True,
+        #save_safetensors=True,
+        max_steps=600000,
+        torch_compile=True,
+        report_to='none'
     )
 
     trainer = transformers.Trainer(
@@ -852,6 +854,6 @@ if __name__ == "__main__":
     if not os.path.isdir(output_dir): 
         os.mkdir(output_dir) 
     shutil.copy(code_path, output_dir) 
-    print (trainer.evaluate())
-    model.train()
-    trainer.train()
+    #print (trainer.evaluate())
+    trainer.train(output_dir + '/checkpoint-200000')
+    #trainer.train()

@@ -82,7 +82,7 @@ if __name__ == '__main__':
         n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
         mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True).to(device)
 
-    model = LlamaForCausalLM.from_pretrained(f'{checkpoint_root}/finemath_training/finemath_llama_n16_h4_c1024/checkpoint-200000')
+    #model = LlamaForCausalLM.from_pretrained(f'{checkpoint_root}/finemath_training/finemath_llama_n16_h4_c1024/checkpoint-200000')
     print (model)
     dataset = load_dataset("openai/gsm8k", "main")
     train_dataset, eval_dataset = dataset['train'], dataset['test']
@@ -93,12 +93,13 @@ if __name__ == '__main__':
     #model_path=f'{checkpoint_root}/finemath_h4_mixed_decay_nonparallel_projs_k1_1024_n16_c1024_b64x4/checkpoint-112000/model.safetensors'
     #model_path=f'{checkpoint_root}/finemath_h4_mixed_decay_nonparallel_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
     #model_path=f'{checkpoint_root}/metamath_SFT_srm_c1024/checkpoint-41500/model.safetensors'
-    #load_model(model, model_path)
+    model_path = f'{checkpoint_root}/gsq_4_mixed_decay_nonparallel_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
+    load_model(model, model_path)
     print ('pretrained model loaded')
     response_template = '||'
     collator = DataCollatorForCompletionOnlyLM(response_template, tokenizer=tokenizer, pad_to_multiple_of=1024)
 
-    output_dir = f'{checkpoint_root}/gsm8k_SFT_transformer_c1024'
+    output_dir = f'{checkpoint_root}/gsm8k_SFT_srm_gsq_c1024'
     training_args = SFTConfig(
         learning_rate = 1e-4,
         weight_decay = 0.1,
@@ -108,7 +109,7 @@ if __name__ == '__main__':
         logging_steps = 25,
         per_device_train_batch_size=16,
         max_seq_length = tokenized_length,
-        num_train_epochs = 13,
+        num_train_epochs = 4,
         save_steps = 100,
         eval_steps = 50,
         eval_strategy = 'steps',

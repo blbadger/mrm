@@ -180,7 +180,7 @@ if __name__ == '__main__':
     eval_dataset = eval_dataset.map(prepare_nshot, num_proc=16)
     print (len(train_dataset))
     #model_path=f'{checkpoint_root}/fineweb_h4_decay_nonparallel_mixed_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
-    model_path = f'{checkpoint_root}/gsm8k_SFT_srm_c1024/chkpt-300/model.safetensors'
+    model_path = f'{checkpoint_root}/gsq_4_mixed_decay_nonparallel_projs_k1_1024_n16_c1024_b16x4/checkpoint-200000/model.safetensors'
     load_model(model, model_path)
 
     max_prompt_length = tokenized_length - 256
@@ -223,4 +223,4 @@ if __name__ == '__main__':
         os.mkdir(output_dir) 
     shutil.copy(code_path, output_dir) 
     #training_args.save_json(output_dir + '/checkpoint-1250')
-    trainer.train()
+    trainer.train(output_dir + '/checkpoint-700')

@@ -175,8 +175,6 @@ class CopyMixer(nn.Module):
         global all_hammings
         if not self.training:
             all_hammings.append(hamming(logits, labels).item())
-        print (f'Accuracy: {sum(all_hammings)/ len(all_hammings)}')
-
         if self.training and all_hammings: 
             print (f'Accuracy: {sum(all_hammings)/ len(all_hammings)}')
             global hamming_log; hamming_log.append(sum(all_hammings)/ len(all_hammings))
@@ -244,7 +242,7 @@ def copy_labels(labels):
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 def half_dataset(example):
-    half_length = len(example['input_ids'])
+    half_length = len(example['input_ids'])//2
     tokens = example['input_ids'][:half_length]
     return {'input_ids': tokens}
 
@@ -271,7 +269,7 @@ if __name__ == "__main__":
     kernel = 1
 
     model = CopyMixer(n_vocab, dim,  tokenized_length, layers, kernel=kernel, heads=n_heads, copy=True, 
-        mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=False)
+        mixed_heads=True, combined_heads=False, decay=False, parallel_heads=False, use_projections=False)
 
     #load_model(model, f"{data_root}/fineweb_copy_repeat_k4_256_n16_b16x4/checkpoint-10000/model.safetensors")
     train_path = f"{data_root}/fineweb-edu-tokenized-train-c1024"
@@ -281,8 +279,8 @@ if __name__ == "__main__":
     datasets.config.IN_MEMORY_MAX_SIZE = 5e9
     train_dataset = load_from_disk(train_path, keep_in_memory=None).take(2000000).batch(batch_size=4, num_proc=8).map(debatch_dataset, num_proc=8)
     test_dataset = load_from_disk(test_path, keep_in_memory=None).batch(batch_size=4, num_proc=8).map(debatch_dataset, num_proc=8).filter(lambda x: x['input_ids'][-1] != 1, num_proc=8).take(4000)
-    #train_dataset = load_from_disk(train_path, keep_in_memory=None).map(half_dataset)
-    #test_dataset = load_from_disk(test_path, keep_in_memory=None).map(half_dataset).filter(lambda x: x['input_ids'][-1] != 1, num_proc=8).take(5000)
+    #train_dataset = load_from_disk(train_path, keep_in_memory=None).take(800000)
+    #test_dataset = load_from_disk(test_path, keep_in_memory=None).take(20000).filter(lambda x: x['input_ids'][-1] != 1, num_proc=8).take(5000)
     print(len(train_dataset), len(test_dataset))
     print (len(train_dataset[0]['input_ids']), tokenizer.decode(train_dataset[0]['input_ids']))
     mlflow.end_run()
@@ -304,8 +302,8 @@ if __name__ == "__main__":
         optim="adamw_torch",
         overwrite_output_dir=True,
         save_safetensors=True,
-        max_steps=10000,
-        torch_compile=True,
+        max_steps=10002,
+        #torch_compile=True,
         #max_grad_norm=200.0
     )
 
@@ -327,8 +325,6 @@ if __name__ == "__main__":
 
     model.train()
     
-    trainer.train(output_dir + '/checkpoint-10000')
-    trainer.evaluate()
     trainer.train()
     print (hamming_log)
     log_path = output_dir + '/evaluation_accuracies.json'
