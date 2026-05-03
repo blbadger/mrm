@@ -100,7 +100,6 @@ def generate_values(policy_model,
 			generated_ids = policy_model.generate(
 				input_ids.repeat(generate_batch, 1),
 				max_new_tokens=tokens_to_generate,
-				stop_strings=["\nQuestion:", "Question:", "Question", "\nQuestion"],
 				tokenizer=tokenizer,
 				do_sample=True,
 				temperature=0.7,
@@ -110,7 +109,13 @@ def generate_values(policy_model,
 		accelerator.wait_for_everyone()	
 		prompt_length = input_ids.shape[1]
 		generated_tokens = generated_ids[:, prompt_length:]
-		
+
+		# clean generation, remove extra questions
+		generated_strings = tokenizer.decode(generator_tokens)
+		truncated_strings = [i.split('\nQuestion')[0] for i in generated_strings]
+		truncated_generations = tokenizer.encode(truncated_strings)
+		cleaned_ids = [tokenizer.encode(i+j) for i, j in zip(input_strings, truncated_generations)]
+
 		# Convert generations to tree structure, back up values, and process
 		tree = convert_generations_to_tree(generated_ids)
 		completions = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
@@ -176,6 +181,7 @@ if __name__ == "__main__":
 	truncated_generations = [i.split('\nQuestion')[0] for i in model_strings]
 	cleaned_generations = [i+j for i, j in zip(input_strings, truncated_generations)]
 	print (cleaned_generations)
+
 	policy_model.clear_cache()
 	print (policy_model.index)
 	output_path = f'{data_root}/gsm8k_rewards_t512'
