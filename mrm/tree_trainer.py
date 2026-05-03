@@ -71,6 +71,7 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 		self.cache_built = False
 		self.device = self.output_layer.weight.device
 		self.warnings_issued={}
+		self.index = 0
 		self.is_reward_model = is_reward_model
 		if is_reward_model:
 			self.loss_fn = nn.MSELoss()
@@ -84,6 +85,9 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 
 	def gradient_checkpointing_enable(self, *args, **kwargs):
 		pass
+	
+	def is_remote_code(self):
+		return False
 
 	def can_generate(self):
 		return True
@@ -116,6 +120,7 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 			for block in self.mixer_blocks:
 				x = block(x, i, True)
 		self.cache_built = True
+		self.index = i + 1
 		return
 
 	@torch.no_grad()
@@ -124,6 +129,7 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 			for h in range(len(block.token_mixing_layer.mixer_heads)):
 				block.token_mixing_layer.mixer_heads[h].cache = torch.zeros(self.hidden_dim//self.n_heads).to('cuda') # removes batch dim
 		self.cache_built = False
+		self.index = 0
 
 	@torch.no_grad()
 	def select_and_expand_cache(self, top_indices, expansion_factor):
@@ -141,7 +147,7 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 		#	print (f'Input Ids: {input_ids[:, -256:]},\n Labels: {labels[:, -256:]}')
 		if not self.cache_built and is_recurrent:
 			self.build_cache(input_ids)
-		index = input_ids.shape[1] - 1
+		index = self.index
 		if is_recurrent:
 			input_ids = input_ids[:, -1] # last token only
 
@@ -149,13 +155,12 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 		x = self.input_layer(input_ids)
 		for block in self.mixer_blocks:
 			x = block(x, index, is_recurrent)
-
+		self.index += 1
 		if not self.is_reward_model:
 			logits = self.output_layer(x).unsqueeze(1)
 		else:
 			# reward model output
 			output = self.reward_head(x).squeeze(-1)
-			#print (f'output: {output[:, -256:]}')
 			if labels is not None:
 				loss = self.loss_fn(output[:, -256:], labels[:, -256:])
 			else:

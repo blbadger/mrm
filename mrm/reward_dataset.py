@@ -87,6 +87,7 @@ def generate_values(policy_model,
 		input_ids = tokenizer.encode(question, 
 			return_tensors='pt', 
 			max_length=1024-tokens_to_generate, 
+			truncation=True,
 			padding='max_length', 
 			padding_side='left').to(device)
 		
@@ -99,6 +100,8 @@ def generate_values(policy_model,
 			generated_ids = policy_model.generate(
 				input_ids.repeat(generate_batch, 1),
 				max_new_tokens=tokens_to_generate,
+				stop_strings=["\nQuestion:", "Question:", "Question", "\nQuestion"],
+				tokenizer=tokenizer,
 				do_sample=True,
 				temperature=0.7,
 				top_p=0.9,
@@ -129,7 +132,6 @@ def generate_values(policy_model,
 			dataset.save_to_disk(output_path + f'/{process_index}_{step}')
 			total_tokens = []
 			total_values= []
-
 	return
 
 
@@ -159,10 +161,23 @@ if __name__ == "__main__":
 		n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
 		mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True, is_reward_model=False).float()
 
-	model_path=f'{checkpoint_root}/gsm8k_SFT_srm_c1024/meta-chkpt-300/model.safetensors'
+	model_path=f'{checkpoint_root}/gsq_4_mixed_decay_nonparallel_projs_k1_1024_n16_c1024_b16x4/checkpoint-600000/model.safetensors'
 	load_model(policy_model, model_path)
 	print ('model loaded')
-	policy_model = torch.compile(policy_model)
+	policy_model = torch.compile(policy_model).to('cuda')
+
+	input_ids = tokenizer.encode('Question: Sally has three crayons and Andy has twice as many crayons as Sally and Harry has twice as many as Andy. How many crayons do they have in total? \nAnswer: ', return_tensors='pt', add_special_tokens=False).repeat(5, 1).to('cuda')
+	output = torch.tensor(policy_model.generate(input_ids, max_new_tokens=128, temperature=0.7, top_p=0.9, tokenizer=tokenizer, do_sample=True))
+	input_length = len(input_ids[1])
+	model_generation = output[:, input_length:]
+	input_strings = tokenizer.decode(input_ids)
+	print ('\n\n', output, tokenizer.decode(model_generation), '\n\n')
+	model_strings = tokenizer.decode(model_generation)
+	truncated_generations = [i.split('\nQuestion')[0] for i in model_strings]
+	cleaned_generations = [i+j for i, j in zip(input_strings, truncated_generations)]
+	print (cleaned_generations)
+	policy_model.clear_cache()
+	print (policy_model.index)
 	output_path = f'{data_root}/gsm8k_rewards_t512'
 	generate_values(policy_model, train_dataset, tokenizer, output_path=output_path)
 
