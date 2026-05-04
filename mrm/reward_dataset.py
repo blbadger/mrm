@@ -51,7 +51,7 @@ def generate_values(policy_model,
 		generate_batch=512,
 		generate_steps=2000,
 		value_constant=10.,
-		save_every=500,
+		save_every=200,
 		output_path=''
 		):
 
@@ -111,14 +111,15 @@ def generate_values(policy_model,
 		generated_tokens = generated_ids[:, prompt_length:]
 
 		# clean generation, remove extra questions
-		generated_strings = tokenizer.decode(generator_tokens)
+		generated_strings = tokenizer.decode(generated_tokens)
 		truncated_strings = [i.split('\nQuestion')[0] for i in generated_strings]
-		truncated_generations = tokenizer.encode(truncated_strings)
-		cleaned_ids = [tokenizer.encode(i+j) for i, j in zip(input_strings, truncated_generations)]
+		generated_tokens = tokenizer.encode(truncated_strings)
+		expanded_question = [question for _ in range(generate_batch)]
+		generated_ids = torch.cat([tokenizer.encode(i+j, return_tensors='pt', pad_token_id=tokenizer.eos_token_id, padding_side='right', padding='max_length', max_length=1024, truncation=True) for i, j in zip(expanded_question, truncated_strings)], dim=0)
 
 		# Convert generations to tree structure, back up values, and process
-		tree = convert_generations_to_tree(generated_ids)
-		completions = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
+		tree = convert_generations_to_tree(generated_ids) # all ids, not just generated
+		completions = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True) # generated only
 		values = test_correctness(completions, answer, value_constant)
 		tree = tree_backup(tree, values)
 		token_values = get_token_values(tree)
@@ -144,7 +145,7 @@ if __name__ == "__main__":
 	load_dotenv()
 	checkpoint_root = os.getenv('CHECKPOINT_ROOT')
 	data_root = os.getenv('DATA_ROOT')
-	tokenizer = AutoTokenizer.from_pretrained(f"{data_root}/tokenizer_fineweb_8k")
+	tokenizer = AutoTokenizer.from_pretrained(f"{data_root}/tokenizer_fineweb_8k", truncation_side='left')
 	tokenizer.pad_token = tokenizer.eos_token
 	n_vocab = tokenizer.vocab_size
 	print("Vocab size: ", n_vocab)
@@ -179,6 +180,7 @@ if __name__ == "__main__":
 	print ('\n\n', output, tokenizer.decode(model_generation), '\n\n')
 	model_strings = tokenizer.decode(model_generation)
 	truncated_generations = [i.split('\nQuestion')[0] for i in model_strings]
+	tokens = tokenizer.encode(truncated_generations)
 	cleaned_generations = [i+j for i, j in zip(input_strings, truncated_generations)]
 	print (cleaned_generations)
 
