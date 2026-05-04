@@ -113,13 +113,15 @@ def generate_values(policy_model,
 		# clean generation, remove extra questions
 		generated_strings = tokenizer.decode(generated_tokens)
 		truncated_strings = [i.split('\nQuestion')[0] for i in generated_strings]
-		generated_tokens = tokenizer.encode(truncated_strings)
-		expanded_question = [question for _ in range(generate_batch)]
-		generated_ids = torch.cat([tokenizer.encode(i+j, return_tensors='pt', pad_token_id=tokenizer.eos_token_id, padding_side='right', padding='max_length', max_length=1024, truncation=True) for i, j in zip(expanded_question, truncated_strings)], dim=0)
+		cleaned_generated_tokens = tokenizer.encode(truncated_strings)
+		
+		# right padded, cleaned question+output. Omit for left padded, unpruned trees
+		#expanded_question = [question for _ in range(generate_batch)]
+		#generated_ids = torch.cat([tokenizer.encode(i+j, return_tensors='pt', pad_token_id=tokenizer.eos_token_id, padding_side='right', padding='max_length', max_length=1024, truncation=True) for i, j in zip(expanded_question, truncated_strings)], dim=0)
 
 		# Convert generations to tree structure, back up values, and process
 		tree = convert_generations_to_tree(generated_ids) # all ids, not just generated
-		completions = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True) # generated only
+		completions = tokenizer.batch_decode(cleaned_generated_tokens, skip_special_tokens=True) # generated only
 		values = test_correctness(completions, answer, value_constant)
 		tree = tree_backup(tree, values)
 		token_values = get_token_values(tree)
