@@ -36,7 +36,7 @@ if __name__ == "__main__":
 
 	model.loss_fn = nn.L1Loss()
 	# initialize with policy model weights (aside from reward head)
-	reward_model_path=f'{checkpoint_root}/gsm8k_SFT_srm_c1024/meta-chkpt-300/model.safetensors'
+	reward_model_path=f'{checkpoint_root}/gsq_4_mixed_decay_nonparallel_projs_k1_1024_n16_c1024_b16x4/checkpoint-600000/model.safetensors'
 	load_model(model, reward_model_path, strict=False)
 
 	n_gpus = torch.cuda.device_count()

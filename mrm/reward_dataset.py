@@ -52,6 +52,7 @@ def generate_values(policy_model,
 		generate_steps=2000,
 		value_constant=10.,
 		save_every=200,
+		right_pad_outputs=False,
 		output_path=''
 		):
 
@@ -75,7 +76,7 @@ def generate_values(policy_model,
 
 	total_tokens = []
 	total_values = []
-	for step in tqdm(range(1801,generate_steps)):
+	for step in tqdm(range(generate_steps)):
 		# Get a dataset element (cycle through process-specific indices)
 		local_idx = step % len(process_indices)
 		data_idx = process_indices[local_idx]
@@ -110,14 +111,14 @@ def generate_values(policy_model,
 		prompt_length = input_ids.shape[1]
 		generated_tokens = generated_ids[:, prompt_length:]
 
-		# clean generation, remove extra questions
+		# clean generation, remove extra questions (generated_ids remain left padded and uncleaned)
 		generated_strings = tokenizer.decode(generated_tokens)
 		truncated_strings = [i.split('\nQuestion')[0] for i in generated_strings]
 		cleaned_generated_tokens = tokenizer.encode(truncated_strings)
-		
-		# right padded, cleaned question+output. Omit for left padded, unpruned trees
-		#expanded_question = [question for _ in range(generate_batch)]
-		#generated_ids = torch.cat([tokenizer.encode(i+j, return_tensors='pt', pad_token_id=tokenizer.eos_token_id, padding_side='right', padding='max_length', max_length=1024, truncation=True) for i, j in zip(expanded_question, truncated_strings)], dim=0)
+		if right_pad_outputs:
+			# right padded, cleaned question+output
+			expanded_question = [question for _ in range(generate_batch)]
+			generated_ids = torch.cat([tokenizer.encode(i+j, return_tensors='pt', pad_token_id=tokenizer.eos_token_id, padding_side='right', padding='max_length', max_length=1024, truncation=True) for i, j in zip(expanded_question, truncated_strings)], dim=0)
 
 		# Convert generations to tree structure, back up values, and process
 		tree = convert_generations_to_tree(generated_ids) # all ids, not just generated

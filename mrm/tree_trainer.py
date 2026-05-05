@@ -143,8 +143,6 @@ class DualMixer(DualMLPMixer, GenerationMixin):
 		if values is not None:
 			labels = values
 		# mask pad tokens in labels for loss computation
-		#if labels is not None:
-		#	print (f'Input Ids: {input_ids[:, -256:]},\n Labels: {labels[:, -256:]}')
 		if not self.cache_built and is_recurrent:
 			self.build_cache(input_ids)
 		index = self.index
@@ -212,7 +210,6 @@ def convert_generations_to_tree(tokens):
 			tree[parent]['is_leaf'] = False
 
 	return tree
-
 
 # example node data structure
 # {'token': 143, 'value': 0.23, 'parent': id_number, 
@@ -930,6 +927,7 @@ if __name__ == "__main__":
 	reward_model = DualMixer(
 		n_vocab, dim, tokenized_length, layers, heads=n_heads, kernel=kernel, expanded_convs=False, copy=False, 
 		mixed_heads=True, combined_heads=False, decay=True, parallel_heads=False, use_projections=True, is_reward_model=True).float()
+	
 	checkpoint_dir = f"{checkpoint_root}/gsm8k_meta_tree_expansion_b512"
 
 	model_path=f'{checkpoint_root}/gsm8k_SFT_srm_c1024/meta-chkpt-300/model.safetensors'
