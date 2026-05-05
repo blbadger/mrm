@@ -75,7 +75,7 @@ def generate_values(policy_model,
 
 	total_tokens = []
 	total_values = []
-	for step in tqdm(range(generate_steps)):
+	for step in tqdm(range(1801,generate_steps)):
 		# Get a dataset element (cycle through process-specific indices)
 		local_idx = step % len(process_indices)
 		data_idx = process_indices[local_idx]
